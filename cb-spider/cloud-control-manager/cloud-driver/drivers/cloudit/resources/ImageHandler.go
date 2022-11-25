@@ -3,6 +3,7 @@ package resources
 import (
 	"errors"
 	"fmt"
+	"github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/drivers/cloudit/client/ace/snapshot"
 	"strings"
 
 	call "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/call-log"
@@ -154,7 +155,7 @@ func (imageHandler *ClouditImageHandler) DeleteImage(imageIID irs.IID) (bool, er
 }
 
 func (imageHandler *ClouditImageHandler) getRawImage(imageIId irs.IID) (*image.ImageInfo, error) {
-	if imageIId.SystemId == "" && imageIId.NameId == ""{
+	if imageIId.SystemId == "" && imageIId.NameId == "" {
 		return nil, errors.New("invalid IID")
 	}
 	imageHandler.Client.TokenID = imageHandler.CredentialInfo.AuthToken
@@ -174,4 +175,54 @@ func (imageHandler *ClouditImageHandler) getRawImage(imageIId irs.IID) (*image.I
 		}
 	}
 	return nil, errors.New("not found image")
+}
+
+func (imageHandler *ClouditImageHandler) GetRawRootImage(imageIId irs.IID, isMyImage bool) (*image.ImageInfo, error) {
+	if imageIId.SystemId == "" && imageIId.NameId == "" {
+		return nil, errors.New("invalid IID")
+	}
+	imageHandler.Client.TokenID = imageHandler.CredentialInfo.AuthToken
+	authHeader := imageHandler.Client.AuthenticatedHeaders()
+
+	requestOpts := client.RequestOpts{
+		MoreHeaders: authHeader,
+	}
+	if isMyImage {
+		snapshotList, err := snapshot.List(imageHandler.Client, &requestOpts)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, rawSnapshot := range *snapshotList {
+			if strings.Contains(rawSnapshot.Name, imageIId.NameId) && rawSnapshot.Bootable == "yes" {
+				rootImage, getRootImageErr := imageHandler.getRawImage(irs.IID{SystemId: rawSnapshot.TemplateId})
+				if getRootImageErr != nil {
+					return nil, getRootImageErr
+				}
+				return rootImage, nil
+			}
+		}
+	} else {
+		imageList, err := image.List(imageHandler.Client, &requestOpts)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, rawImage := range *imageList {
+			if strings.EqualFold(imageIId.SystemId, rawImage.ID) {
+				return &rawImage, nil
+			}
+		}
+	}
+	return nil, errors.New("not found image")
+}
+
+func (imageHandler *ClouditImageHandler) CheckWindowsImage(imageIID irs.IID) (bool, error) {
+	rawRootImage, getRawRootImageErr := imageHandler.GetRawRootImage(imageIID, false)
+	if getRawRootImageErr != nil {
+		return false, errors.New(fmt.Sprintf("Failed to Check Windows Image. err = %s", getRawRootImageErr.Error()))
+	}
+
+	isWindows := strings.Contains(strings.ToLower(rawRootImage.OS), "windows")
+	return isWindows, nil
 }

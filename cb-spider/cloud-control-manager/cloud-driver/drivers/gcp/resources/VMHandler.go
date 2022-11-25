@@ -16,13 +16,13 @@ import (
 	"errors"
 	_ "errors"
 	"fmt"
-	"log"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
-	keypair "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/common"
+	//keypair "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/common"
+	cdcom "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/common"
 	//cim "github.com/cloud-barista/cb-spider/cloud-info-manager"
 	compute "google.golang.org/api/compute/v1"
 	// "golang.org/x/oauth2/google"
@@ -40,8 +40,8 @@ type GCPVMHandler struct {
 	Credential idrv.CredentialInfo
 }
 
-//https://cloud.google.com/compute/docs/reference/rest/v1/instances
-//https://cloud.google.com/compute/docs/disks#disk-types
+// https://cloud.google.com/compute/docs/reference/rest/v1/instances
+// https://cloud.google.com/compute/docs/disks#disk-types
 func (vmHandler *GCPVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, error) {
 	// Set VM Create Information
 	// GCP 는 reqinfo에 ProjectID를 받아야 함.
@@ -51,13 +51,103 @@ func (vmHandler *GCPVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, err
 	vmName := vmReqInfo.IId.NameId
 	projectID := vmHandler.Credential.ProjectID
 	prefix := "https://www.googleapis.com/compute/v1/projects/" + projectID
-	//imageURL := "projects/ubuntu-os-cloud/global/images/ubuntu-minimal-1804-bionic-v20191024"
-	imageURL := vmReqInfo.ImageIID.SystemId
-	region := vmHandler.Region.Region
 
+	region := vmHandler.Region.Region
 	zone := vmHandler.Region.Zone
 	// email을 어디다가 넣지? 이것또한 문제넹
 	clientEmail := vmHandler.Credential.ClientEmail
+
+	//imageURL := "projects/ubuntu-os-cloud/global/images/ubuntu-minimal-1804-bionic-v20191024"
+	imageURL := vmReqInfo.ImageIID.SystemId
+	isMyImage := false
+	isWindows := false
+
+	// public Image vs myImage
+	if vmReqInfo.ImageType == irs.MyImage {
+		isMyImage = true
+		imageURL = "global/machineImages/" + imageURL // MyImage는 ImageURL 형태가 아니라 ID를 사용하므로 앞에 URL 형태를 붙여줌
+	}
+	// 이미지 사이즈 추출
+	//var projectIdForImage string
+	var imageSize int64
+	//imageUrlArr := strings.Split(imageURL, "/")
+	//imageName := imageUrlArr[len(imageUrlArr)-1]
+
+	var pubKey string
+	if isMyImage {
+
+		//spider-myimage-1-cdlkbi2t39h9lqh14i90
+		//projects/csta-349809/global/machineImages",
+
+		machineImage, err := GetMachineImageInfo(vmHandler.Client, projectID, vmReqInfo.ImageIID.SystemId)
+		if err != nil {
+			return irs.VMInfo{}, err
+		}
+
+		// osFeatures := machineImage.GuestOsFeatures
+
+		// for _, feature := range osFeatures {
+		// 	if feature.Type == "WINDOWS" {
+		// 		isWindows = true
+		// 		break
+		// 	}
+		// }
+
+		// disks := machineImage.SavedDisks
+		// for _, disk := range disks {
+		// 	if disk
+		// 		isWindows = true
+		// 		break
+		// 	}
+		// }
+		ip := machineImage.InstanceProperties
+		disks := ip.Disks
+		for _, disk := range disks {
+			if disk.Boot { // Boot Device
+				//diskSize := disk.DiskSizeGb
+				imageSize = disk.DiskSizeGb // image size가 맞나??
+				cblogger.Info(imageSize)
+				osFeatures := disk.GuestOsFeatures
+				for _, feature := range osFeatures {
+					if feature.Type == "WINDOWS" {
+						isWindows = true
+						break
+					}
+				}
+				cblogger.Info(isWindows)
+			}
+		}
+
+		//imageSize = machineImage.DiskSizeGb
+
+	} else {
+
+		computeImage, err := GetPublicImageInfo(vmHandler.Client, vmReqInfo.ImageIID)
+		if err != nil {
+			cblogger.Info("GetPublicImageInfo err : ", err)
+			return irs.VMInfo{}, err
+		}
+
+		// projectIdForImage = imageUrlArr[6]
+		// imageResp, err := vmHandler.Client.Images.Get(projectIdForImage, imageName).Do()
+		// if err != nil {
+		// 	log.Fatal(err)
+		// }
+		// spew.Dump(imageResp)
+		//osFeatures := imageResp.GuestOsFeatures
+		osFeatures := computeImage.GuestOsFeatures
+
+		for _, feature := range osFeatures {
+			if feature.Type == "WINDOWS" {
+				isWindows = true
+			}
+		}
+
+		imageSize = computeImage.DiskSizeGb
+
+	}
+	cblogger.Info("isMyImage = ", isMyImage)
+	cblogger.Info("isWindows = ", isWindows)
 
 	/* // 2020-05-15 Name 기반 로직을 임의로 막아 놓음 - 다음 버전에 적용 예정. 현재는 URL 방식
 	//이미지 URL처리
@@ -104,27 +194,6 @@ func (vmHandler *GCPVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, err
 	// 	publicIPAddress = publicIPInfo.PublicIP
 	// }
 
-	//KEYPAIR HANDLER
-	keypairHandler := GCPKeyPairHandler{
-		vmHandler.Credential, vmHandler.Region}
-	keypairInfo, errKeypair := keypairHandler.GetKey(vmReqInfo.KeyPairIID)
-	if errKeypair != nil {
-		cblogger.Error(errKeypair)
-		return irs.VMInfo{}, errKeypair
-	}
-
-	cblogger.Debug("공개키 생성")
-	publicKey, errPub := keypair.MakePublicKeyFromPrivateKey(keypairInfo.PrivateKey)
-	if errPub != nil {
-		cblogger.Error(errPub)
-		return irs.VMInfo{}, errPub
-	}
-
-	//pubKey := "cb-user:" + keypairInfo.PublicKey
-	pubKey := "cb-user:" + strings.TrimSpace(publicKey) + " " + "cb-user"
-	cblogger.Debug("keypairInfo 정보")
-	spew.Dump(keypairInfo)
-
 	/*
 		type GCPImageHandler struct {
 			Region     idrv.RegionInfo
@@ -133,6 +202,30 @@ func (vmHandler *GCPVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, err
 			Credential idrv.CredentialInfo
 		}
 	*/
+
+	// keyPair 정보는 window가 아닐 때만 Set
+	if !isWindows {
+		//KEYPAIR HANDLER
+		keypairHandler := GCPKeyPairHandler{
+			vmHandler.Credential, vmHandler.Region}
+		keypairInfo, errKeypair := keypairHandler.GetKey(vmReqInfo.KeyPairIID)
+		if errKeypair != nil {
+			cblogger.Error(errKeypair)
+			return irs.VMInfo{}, errKeypair
+		}
+
+		cblogger.Debug("공개키 생성")
+		publicKey, errPub := cdcom.MakePublicKeyFromPrivateKey(keypairInfo.PrivateKey)
+		if errPub != nil {
+			cblogger.Error(errPub)
+			return irs.VMInfo{}, errPub
+		}
+
+		//pubKey := "cb-user:" + keypairInfo.PublicKey
+		pubKey = "cb-user:" + strings.TrimSpace(publicKey) + " " + "cb-user"
+		cblogger.Debug("keypairInfo 정보")
+		spew.Dump(keypairInfo)
+	}
 
 	// Security Group Tags
 	var securityTags []string
@@ -148,6 +241,7 @@ func (vmHandler *GCPVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, err
 
 	cblogger.Info("networkURL 정보 : ", networkURL)
 	cblogger.Info("subnetWorkURL 정보 : ", subnetWorkURL)
+
 	instance := &compute.Instance{
 		Name: vmName,
 		Metadata: &compute.Metadata{
@@ -167,10 +261,10 @@ func (vmHandler *GCPVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, err
 				AutoDelete: true,
 				Boot:       true,
 				Type:       "PERSISTENT",
-				InitializeParams: &compute.AttachedDiskInitializeParams{
-					//DiskName:    vmName, //disk name 도 매번 바뀌어야 하는 값, 루트 디스크 이름은 특별히 지정하지 않는 경우 vm이름으로 생성됨
-					SourceImage: imageURL,
-				},
+				// InitializeParams: &compute.AttachedDiskInitializeParams{
+				// 	//DiskName:    vmName, //disk name 도 매번 바뀌어야 하는 값, 루트 디스크 이름은 특별히 지정하지 않는 경우 vm이름으로 생성됨
+				// 	SourceImage: imageURL,
+				// },
 			},
 		},
 		NetworkInterfaces: []*compute.NetworkInterface{
@@ -200,108 +294,127 @@ func (vmHandler *GCPVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, err
 		},
 	}
 
-	//이슈 #348에 의해 RootDisk 및 사이즈 변경 기능 지원
-	//=============================
-	// Root Disk Type 변경
-	//=============================
-	ctx := context.Background()
-
-	//var validDiskSize = ""
-	if vmReqInfo.RootDiskType == "" || strings.EqualFold(vmReqInfo.RootDiskType, "default") {
-		//디스크 정보가 없으면 건드리지 않음.
-	} else {
-		//https://cloud.google.com/compute/docs/disks#disk-types
-		instance.Disks[0].InitializeParams.DiskType = prefix + "/zones/" + zone + "/diskTypes/" + vmReqInfo.RootDiskType
-	}
-
-	//=============================
-	// Root Disk Size 변경
-	//=============================
-	// if vmReqInfo.RootDiskSize == "" {
-	// 	//디스크 정보가 없으면 건드리지 않음.
-	// }
-
-	//=============================
-	// Root Disk Size 변경
-	//=============================
-	if vmReqInfo.RootDiskSize == "" || strings.EqualFold(vmReqInfo.RootDiskSize, "default") {
-		//instance.Disks[0].InitializeParams.DiskSizeGb = diskSize.minSize
-	} else {
-
-		iDiskSize, err := strconv.ParseInt(vmReqInfo.RootDiskSize, 10, 64)
+	//Windows OS인 경우 administrator 계정 비번 설정 및 계정 활성화
+	if isWindows {
+		err := cdcom.ValidateWindowsPassword(vmReqInfo.VMUserPasswd)
 		if err != nil {
-			cblogger.Error(err)
 			return irs.VMInfo{}, err
 		}
 
-		var diskType = ""
+		winOsMeta := "net user \"administrator\" \"" + vmReqInfo.VMUserPasswd + "\"\nnet user administrator /active:yes"
+		winOsPwd := compute.MetadataItems{Key: "windows-startup-script-cmd", Value: &winOsMeta}
+		instance.Metadata.Items = append(instance.Metadata.Items, &winOsPwd)
+	}
 
+	// imageType이 MyImage인 경우 SourceMachineImage Setting
+	if isMyImage {
+		instance.SourceMachineImage = imageURL
+	} else {
+		instance.Disks[0].InitializeParams = &compute.AttachedDiskInitializeParams{
+			SourceImage: imageURL,
+		}
+
+		//이슈 #348에 의해 RootDisk 및 사이즈 변경 기능 지원
+		//=============================
+		// Root Disk Type 변경
+		//=============================
+
+		//var validDiskSize = ""
 		if vmReqInfo.RootDiskType == "" || strings.EqualFold(vmReqInfo.RootDiskType, "default") {
-			// cloudOSMetaInfo, err := cim.GetCloudOSMetaInfo("GCP") // cloudos_meta 에 DiskType, min, max 값 정의 되어있음.
-			// if err != nil {
-			// 	cblogger.Error(err)
-			// 	return irs.VMInfo{}, err
-			// }
-			// diskType = cloudOSMetaInfo.RootDiskType[0]
+			//디스크 정보가 없으면 건드리지 않음.
 		} else {
-			diskType = vmReqInfo.RootDiskType
+			//https://cloud.google.com/compute/docs/disks#disk-types
+			instance.Disks[0].InitializeParams.DiskType = prefix + "/zones/" + zone + "/diskTypes/" + vmReqInfo.RootDiskType
+		}
 
-			// RootDiskType을 조회하여 diskSize의 min, max, default값 추출 한 뒤 입력된 diskSize가 있으면 비교시 사용
-			diskSizeResp, err := vmHandler.Client.DiskTypes.Get(projectID, zone, diskType).Context(ctx).Do()
-			if err != nil {
-				fmt.Println("Invalid Disk Type Error!!")
-				return irs.VMInfo{}, err
-			}
+		//=============================
+		// Root Disk Size 변경
+		//=============================
+		// if vmReqInfo.RootDiskSize == "" {
+		// 	//디스크 정보가 없으면 건드리지 않음.
+		// }
 
-			fmt.Printf("valid disk size: %#v\n", diskSizeResp.ValidDiskSize)
+		//=============================
+		// Root Disk Size 변경
+		//=============================
+		if vmReqInfo.RootDiskSize == "" || strings.EqualFold(vmReqInfo.RootDiskSize, "default") {
+			//instance.Disks[0].InitializeParams.DiskSizeGb = diskSize.minSize
+		} else {
 
-			//valid disk size 정의
-			re := regexp.MustCompile("GB-?") //ex) 10GB-65536GB
-			diskSizeArr := re.Split(diskSizeResp.ValidDiskSize, -1)
-			diskMinSize, err := strconv.ParseInt(diskSizeArr[0], 10, 64)
-			if err != nil {
-				cblogger.Error(err)
-				return irs.VMInfo{}, err
-			}
-
-			diskMaxSize, err := strconv.ParseInt(diskSizeArr[1], 10, 64)
+			iDiskSize, err := strconv.ParseInt(vmReqInfo.RootDiskSize, 10, 64)
 			if err != nil {
 				cblogger.Error(err)
 				return irs.VMInfo{}, err
 			}
 
-			// diskUnit := "GB" // 기본 단위는 GB
+			var diskType = ""
 
-			if iDiskSize < diskMinSize {
-				fmt.Println("Disk Size Error!!: ", iDiskSize)
-				//return irs.VMInfo{}, errors.New("Requested disk size cannot be smaller than the minimum disk size, invalid")
-				return irs.VMInfo{}, errors.New("Root Disk Size must be at least the default size (" + strconv.FormatInt(diskMinSize, 10) + " GB).")
+			if vmReqInfo.RootDiskType == "" || strings.EqualFold(vmReqInfo.RootDiskType, "default") {
+				// cloudOSMetaInfo, err := cim.GetCloudOSMetaInfo("GCP") // cloudos_meta 에 DiskType, min, max 값 정의 되어있음.
+				// if err != nil {
+				// 	cblogger.Error(err)
+				// 	return irs.VMInfo{}, err
+				// }
+				// diskType = cloudOSMetaInfo.RootDiskType[0]
+			} else {
+				diskType = vmReqInfo.RootDiskType
+
+				// RootDiskType을 조회하여 diskSize의 min, max, default값 추출 한 뒤 입력된 diskSize가 있으면 비교시 사용
+				diskSizeResp, err := vmHandler.Client.DiskTypes.Get(projectID, zone, diskType).Do()
+				if err != nil {
+					fmt.Println("Invalid Disk Type Error!!")
+					return irs.VMInfo{}, err
+				}
+
+				fmt.Printf("valid disk size: %#v\n", diskSizeResp.ValidDiskSize)
+
+				//valid disk size 정의
+				re := regexp.MustCompile("GB-?") //ex) 10GB-65536GB
+				diskSizeArr := re.Split(diskSizeResp.ValidDiskSize, -1)
+				diskMinSize, err := strconv.ParseInt(diskSizeArr[0], 10, 64)
+				if err != nil {
+					cblogger.Error(err)
+					return irs.VMInfo{}, err
+				}
+
+				diskMaxSize, err := strconv.ParseInt(diskSizeArr[1], 10, 64)
+				if err != nil {
+					cblogger.Error(err)
+					return irs.VMInfo{}, err
+				}
+
+				// diskUnit := "GB" // 기본 단위는 GB
+
+				if iDiskSize < diskMinSize {
+					fmt.Println("Disk Size Error!!: ", iDiskSize)
+					//return irs.VMInfo{}, errors.New("Requested disk size cannot be smaller than the minimum disk size, invalid")
+					return irs.VMInfo{}, errors.New("Root Disk Size must be at least the default size (" + strconv.FormatInt(diskMinSize, 10) + " GB).")
+				}
+
+				if iDiskSize > diskMaxSize {
+					fmt.Println("Disk Size Error!!: ", iDiskSize)
+					//return irs.VMInfo{}, errors.New("Requested disk size cannot be larger than the maximum disk size, invalid")
+					return irs.VMInfo{}, errors.New("Root Disk Size must be smaller than the maximum size (" + strconv.FormatInt(diskMaxSize, 10) + " GB).")
+				}
 			}
 
-			if iDiskSize > diskMaxSize {
+			//imageSize = imageResp.DiskSizeGb
+
+			if iDiskSize < imageSize {
 				fmt.Println("Disk Size Error!!: ", iDiskSize)
-				//return irs.VMInfo{}, errors.New("Requested disk size cannot be larger than the maximum disk size, invalid")
-				return irs.VMInfo{}, errors.New("Root Disk Size must be smaller than the maximum size (" + strconv.FormatInt(diskMaxSize, 10) + " GB).")
+				return irs.VMInfo{}, errors.New("Root Disk Size must be larger then the image size (" + strconv.FormatInt(imageSize, 10) + " GB).")
 			}
+
+			instance.Disks[0].InitializeParams.DiskSizeGb = iDiskSize
+
 		}
+	}
 
-		imageUrlArr := strings.Split(imageURL, "/")
-
-		// 이미지 사이즈 추출
-		imageResp, err := vmHandler.Client.Images.Get(imageUrlArr[6], imageUrlArr[9]).Context(ctx).Do() // 수정 필요
-		if err != nil {
-			log.Fatal(err)
+	for _, dataDisk := range vmReqInfo.DataDiskIIDs {
+		disk := compute.AttachedDisk{
+			Source: prefix + "/zones/" + zone + "/disks/" + dataDisk.SystemId,
 		}
-		imageSize := imageResp.DiskSizeGb
-
-		if iDiskSize < imageSize {
-			fmt.Println("Disk Size Error!!: ", iDiskSize)
-			//return irs.VMInfo{}, errors.New("Requested disk size cannot be smaller than the image size, invalid")
-			return irs.VMInfo{}, errors.New("Root Disk Size must be larger then the image size (" + strconv.FormatInt(imageSize, 10) + " GB).")
-		}
-
-		instance.Disks[0].InitializeParams.DiskSizeGb = iDiskSize
-
+		instance.Disks = append(instance.Disks, &disk)
 	}
 
 	cblogger.Info("VM 생성 시작")
@@ -813,6 +926,58 @@ func (vmHandler *GCPVMHandler) GetVM(vmID irs.IID) (irs.VMInfo, error) {
 	return vmInfo, nil
 }
 
+/*
+GCP에서 instance 조회는 Project, ZONE 이 필수임.
+경우에 따라서 Zone 없이 VM ID만으로 조회하느 기능이 필요하여
+전체 목록에서 id를 filter해서 가져옴.
+vmID는 project에서 unique
+*/
+func (vmHandler *GCPVMHandler) GetVmById(vmID irs.IID) (irs.VMInfo, error) {
+	projectID := vmHandler.Credential.ProjectID
+
+	vmInfo := irs.VMInfo{}
+
+	// logger for HisCall
+	callogger := call.GetLogger("HISCALL")
+	callLogInfo := call.CLOUDLOGSCHEMA{
+		CloudOS:      call.GCP,
+		RegionZone:   vmHandler.Region.Zone,
+		ResourceType: call.VM,
+		ResourceName: vmID.SystemId,
+		CloudOSAPI:   "GetVM()",
+		ElapsedTime:  "",
+		ErrorMSG:     "",
+	}
+	callLogStart := call.Start()
+	instanceListByzone, err := vmHandler.Client.Instances.AggregatedList(projectID).Filter("name=" + vmID.SystemId).Do()
+	callLogInfo.ElapsedTime = call.Elapsed(callLogStart)
+	if err != nil {
+		callLogInfo.ErrorMSG = err.Error()
+		callogger.Info(call.String(callLogInfo))
+		cblogger.Error(err)
+		return irs.VMInfo{}, err
+	}
+	callogger.Info(call.String(callLogInfo))
+	foundVm := false
+	for _, item := range instanceListByzone.Items {
+		if foundVm {
+			break // 찾았으면 더 돌 필요 없음.
+		}
+		if item.Instances != nil {
+			for _, instance := range item.Instances {
+				if strings.EqualFold(vmID.SystemId, instance.Name) {
+					spew.Dump(instance)
+					vmInfo = vmHandler.mappingServerInfo(instance)
+					foundVm = true
+					break
+				}
+			}
+		}
+	}
+
+	return vmInfo, nil
+}
+
 // func getVmStatus(vl *compute.Service) string {
 // 	var powerState, provisioningState string
 
@@ -850,7 +1015,12 @@ func (vmHandler *GCPVMHandler) mappingServerInfo(server *compute.Instance) irs.V
 	subnetArr := strings.Split(server.NetworkInterfaces[0].Subnetwork, "/")
 	vpcName := vpcArr[len(vpcArr)-1]
 	subnetName := subnetArr[len(subnetArr)-1]
-	diskInfo := vmHandler.getDiskInfo(server.Disks[0].Source)
+	// root disk의 type이 instance의 get으로 조회되지 않아서 getDiskInfo 호출
+	diskInfo, err := vmHandler.getDiskInfo(server.Disks[0].Source)
+	if err != nil {
+		cblogger.Error(err)
+		return irs.VMInfo{}
+	}
 	diskTypeArr := strings.Split(diskInfo.Type, "/")
 	diskType := diskTypeArr[len(diskTypeArr)-1]
 
@@ -865,6 +1035,20 @@ func (vmHandler *GCPVMHandler) mappingServerInfo(server *compute.Instance) irs.V
 			SystemId: item,
 		}
 		iIdBox.Items = append(iIdBox.Items, iId)
+	}
+
+	var attachedDisk IIDBox
+	for idx, disk := range server.Disks {
+		// index 0은 root disk
+		if idx > 0 {
+			diskArr := strings.Split(disk.Source, "/")
+			diskName := diskArr[len(diskArr)-1]
+			diskIID := irs.IID{
+				NameId:   diskName,
+				SystemId: diskName,
+			}
+			attachedDisk.Items = append(attachedDisk.Items, diskIID)
+		}
 	}
 
 	vmInfo := irs.VMInfo{
@@ -886,7 +1070,7 @@ func (vmHandler *GCPVMHandler) mappingServerInfo(server *compute.Instance) irs.V
 			NameId:   server.Labels["keypair"],
 			SystemId: server.Labels["keypair"],
 		},
-		ImageIId:  vmHandler.getImageInfo(server.Disks[0].Source),
+		ImageIId:  vmHandler.getImageIID(server),
 		PublicIP:  server.NetworkInterfaces[0].AccessConfigs[0].NatIP,
 		PrivateIP: server.NetworkInterfaces[0].NetworkIP,
 		VpcIID: irs.IID{
@@ -900,14 +1084,20 @@ func (vmHandler *GCPVMHandler) mappingServerInfo(server *compute.Instance) irs.V
 		RootDiskType:   diskType,
 		RootDiskSize:   strconv.FormatInt(diskInfo.SizeGb, 10),
 		RootDeviceName: server.Disks[0].DeviceName,
+		DataDiskIIDs:   attachedDisk.Items,
 		KeyValueList: []irs.KeyValue{
 			{"SubNetwork", server.NetworkInterfaces[0].Subnetwork},
 			{"AccessConfigName", server.NetworkInterfaces[0].AccessConfigs[0].Name},
 			{"NetworkTier", server.NetworkInterfaces[0].AccessConfigs[0].NetworkTier},
 			{"DiskDeviceName", server.Disks[0].DeviceName},
 			{"DiskName", server.Disks[0].Source},
+
+			{"Kind", server.Kind},
+			{"ZoneUrl", server.Zone},
 		},
 	}
+
+	vmInfo.ImageType = vmHandler.getImageType(server.SourceMachineImage)
 
 	arrVmSpec := strings.Split(server.MachineType, "/")
 	cblogger.Info(arrVmSpec)
@@ -931,58 +1121,64 @@ func (vmHandler *GCPVMHandler) mappingServerInfo(server *compute.Instance) irs.V
 	return vmInfo
 }
 
-//이미지 URL 방식 대신 이름을 사용하도록 변경 중
-//@TODO : 2020-05-15 카푸치노 버전에서는 이름 대신 URL을 사용하기로 했음.
-func (vmHandler *GCPVMHandler) getImageInfo(diskname string) irs.IID {
-	projectID := vmHandler.Credential.ProjectID
-	zone := vmHandler.Region.Zone
-	dArr := strings.Split(diskname, "/")
-	var result string
-	if dArr != nil {
-		result = dArr[len(dArr)-1]
-	}
-	cblogger.Infof("result : [%s]", result)
+func (vmHandler *GCPVMHandler) getImageType(sourceMachineImage string) irs.ImageType {
+	var imageType irs.ImageType
 
-	info, err := vmHandler.Client.Disks.Get(projectID, zone, result).Do()
-
-	cblogger.Infof("********************************** Disk 정보 ****************")
-	spew.Dump(info)
-	if err != nil {
-		cblogger.Error(err)
-		return irs.IID{}
+	if sourceMachineImage != "" {
+		imageType = irs.MyImage
+	} else {
+		imageType = irs.PublicImage
 	}
 
-	/* 2020-05-14 카푸치노 다음 버전에서 사용 예정
-	arrImageUrl := strings.Split(info.SourceImage, "/")
-	imageName := ""
-	if len(arrImageUrl) > 0 {
-		imageName = arrImageUrl[len(arrImageUrl)-1]
-	}
-	iId := irs.IID{
-		NameId:   imageName,
-		SystemId: imageName,
-	}
-	*/
+	return imageType
+}
 
-	iId := irs.IID{
-		NameId:   info.SourceImage, //2020-05-14 NameId는 사용자가 사용한 이름도 있기 때문에 리턴하지 않도록 수정
-		SystemId: info.SourceImage,
-	}
+// 이미지 URL 방식 대신 이름을 사용하도록 변경 중
+// @TODO : 2020-05-15 카푸치노 버전에서는 이름 대신 URL을 사용하기로 했음.
+func (vmHandler *GCPVMHandler) getImageIID(server *compute.Instance) irs.IID {
+	// projectID := vmHandler.Credential.ProjectID
+	// zone := vmHandler.Region.Zone
+	// dArr := strings.Split(diskname, "/")
+	// var result string
+	// if dArr != nil {
+	// 	result = dArr[len(dArr)-1]
+	// }
+	// cblogger.Infof("result : [%s]", result)
+	iId := irs.IID{}
+	if server.SourceMachineImage != "" {
+		iId.NameId = server.SourceMachineImage
+		iId.SystemId = server.SourceMachineImage
+	} else {
+		info, err := vmHandler.getDiskInfo(server.Disks[0].Source)
 
-	/*
-		iId := irs.IID{
-			NameId: info.Name,
-			//SystemId: strconv.FormatUint(info.Id, 10),
-			SystemId: info.Name,
+		cblogger.Infof("********************************** Disk 정보 ****************")
+		spew.Dump(info)
+		if err != nil {
+			cblogger.Error(err)
+			return irs.IID{}
 		}
-	*/
+
+		/* 2020-05-14 카푸치노 다음 버전에서 사용 예정
+		arrImageUrl := strings.Split(info.SourceImage, "/")
+		imageName := ""
+		if len(arrImageUrl) > 0 {
+			imageName = arrImageUrl[len(arrImageUrl)-1]
+		}
+		iId := irs.IID{
+			NameId:   imageName,
+			SystemId: imageName,
+		}
+		*/
+
+		iId.NameId = info.SourceImage //2020-05-14 NameId는 사용자가 사용한 이름도 있기 때문에 리턴하지 않도록 수정
+		iId.SystemId = info.SourceImage
+
+	}
 	return iId
 }
 
 // getVM에서 DiskSize, DiskType이 넘어오지 않아 Disk정보를 조회
-func (vmHandler *GCPVMHandler) getDiskInfo(diskname string) *compute.Disk {
-	projectID := vmHandler.Credential.ProjectID
-	zone := vmHandler.Region.Zone
+func (vmHandler *GCPVMHandler) getDiskInfo(diskname string) (*compute.Disk, error) {
 	dArr := strings.Split(diskname, "/")
 	var result string
 	if dArr != nil {
@@ -990,16 +1186,16 @@ func (vmHandler *GCPVMHandler) getDiskInfo(diskname string) *compute.Disk {
 	}
 	cblogger.Infof("result : [%s]", result)
 
-	info, err := vmHandler.Client.Disks.Get(projectID, zone, result).Do()
+	info, err := GetDiskInfo(vmHandler.Client, vmHandler.Credential, vmHandler.Region, result)
 
 	cblogger.Infof("********************************** Disk 정보 ****************")
 	spew.Dump(info)
 	if err != nil {
 		cblogger.Error(err)
-		return info
+		return &compute.Disk{}, err
 	}
 
-	return info
+	return info, nil
 }
 
 // func (vmHandler *GCPVMHandler) getKeyPairInfo(diskname string) irs.IID {

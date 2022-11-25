@@ -192,7 +192,7 @@ func CallMonitoringAsync(wg *sync.WaitGroup, nsID string, mcisID string, mcisSer
 	UpdateVmInfo(nsID, mcisID, vmInfoTmp)
 
 	if mcisServiceType == "" {
-		mcisServiceType = "default"
+		mcisServiceType = common.StrMCIS
 	}
 
 	url := common.DragonflyRestUrl + cmd
@@ -248,13 +248,6 @@ func CallMonitoringAsync(wg *sync.WaitGroup, nsID string, mcisID string, mcisSer
 		common.CBLog.Error(err)
 		errStr += "/ " + err.Error()
 	} else {
-		fmt.Println("HTTP Status code: " + strconv.Itoa(res.StatusCode))
-		switch {
-		case res.StatusCode >= 400 || res.StatusCode < 200:
-			err = fmt.Errorf("HTTP Status: not in 200-399")
-			common.CBLog.Error(err)
-			errStr += "/ " + err.Error()
-		}
 
 		body, err := ioutil.ReadAll(res.Body)
 		if err != nil {
@@ -263,9 +256,16 @@ func CallMonitoringAsync(wg *sync.WaitGroup, nsID string, mcisID string, mcisSer
 		}
 		defer res.Body.Close()
 
+		fmt.Println("HTTP Status code: " + strconv.Itoa(res.StatusCode))
+		switch {
+		case res.StatusCode >= 400 || res.StatusCode < 200:
+			err = fmt.Errorf("CB-DF HTTP Status: " + strconv.Itoa(res.StatusCode) + " / " + string(body))
+			common.CBLog.Error(err)
+			errStr += "/ " + err.Error()
+		}
+
 		result = string(body)
 	}
-	defer res.Body.Close()
 
 	//wg.Done() //goroutin sync done
 
@@ -276,7 +276,7 @@ func CallMonitoringAsync(wg *sync.WaitGroup, nsID string, mcisID string, mcisSer
 	sshResultTmp.VmId = vmID
 	sshResultTmp.VmIp = vmIP
 
-	if err != nil {
+	if err != nil || errStr != "" {
 		common.CBLog.Error("[Monitoring Agent deployment errors] " + errStr)
 		sshResultTmp.Result = errStr
 		sshResultTmp.Err = err

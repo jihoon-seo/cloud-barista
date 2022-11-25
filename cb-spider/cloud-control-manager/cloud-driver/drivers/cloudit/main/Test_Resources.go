@@ -10,6 +10,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"io/ioutil"
 	"os"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -33,6 +34,7 @@ func getResourceHandler(resourceType string, config ResourceConfig) (interface{}
 			Password:         config.Cloudit.Password,
 			TenantId:         config.Cloudit.TenantID,
 			AuthToken:        config.Cloudit.AuthToken,
+			ClusterId:        config.Cloudit.ClusterID,
 		},
 	}
 
@@ -55,6 +57,10 @@ func getResourceHandler(resourceType string, config ResourceConfig) (interface{}
 		resourceHandler, _ = cloudConnection.CreateVMHandler()
 	case "nlb":
 		resourceHandler, _ = cloudConnection.CreateNLBHandler()
+	case "disk":
+		resourceHandler, _ = cloudConnection.CreateDiskHandler()
+	case "myimage":
+		resourceHandler, _ = cloudConnection.CreateMyImageHandler()
 	}
 	return resourceHandler, nil
 }
@@ -533,7 +539,8 @@ func testVMHandlerListPrint() {
 	res_cblogger.Info("7. SuspendVM()")
 	res_cblogger.Info("8. ResumeVM()")
 	res_cblogger.Info("9. TerminateVM()")
-	res_cblogger.Info("10. Exit")
+	res_cblogger.Info("10. StartVM() - from MyImage")
+	res_cblogger.Info("11. Exit")
 }
 
 func testVmHandler(config ResourceConfig) {
@@ -551,10 +558,15 @@ func testVmHandler(config ResourceConfig) {
 		NameId:   config.Cloudit.VM.IID.NameId,
 		SystemId: config.Cloudit.VM.IID.SystemId,
 	}
+	var vmDataDiskIIDs []irs.IID
+	for _, dataDisk := range config.Cloudit.VM.DataDiskIIDs {
+		vmDataDiskIIDs = append(vmDataDiskIIDs, irs.IID{NameId: dataDisk.NameId})
+	}
 	vmReqInfo := irs.VMReqInfo{
 		IId: irs.IID{
 			NameId: config.Cloudit.VM.IID.NameId,
 		},
+		ImageType: irs.PublicImage,
 		ImageIID: irs.IID{
 			NameId:   config.Cloudit.VM.ImageIID.NameId,
 			SystemId: config.Cloudit.VM.ImageIID.SystemId,
@@ -572,6 +584,33 @@ func testVmHandler(config ResourceConfig) {
 		SecurityGroupIIDs: SecurityGroupIIDs,
 		RootDiskSize:      "",
 		RootDiskType:      "",
+		DataDiskIIDs:      vmDataDiskIIDs,
+		VMUserPasswd:      config.Cloudit.VM.VMUserPasswd,
+	}
+	vmFromSnapshotReqInfo := irs.VMReqInfo{
+		IId: irs.IID{
+			NameId: config.Cloudit.VMFromMyImage.IID.NameId,
+		},
+		ImageType: irs.MyImage,
+		ImageIID: irs.IID{
+			NameId:   config.Cloudit.VMFromMyImage.ImageIID.NameId,
+			SystemId: config.Cloudit.VMFromMyImage.ImageIID.SystemId,
+		},
+		VpcIID: irs.IID{
+			NameId: config.Cloudit.VMFromMyImage.VpcIID.NameId,
+		},
+		SubnetIID: irs.IID{
+			NameId: config.Cloudit.VMFromMyImage.SubnetIID.NameId,
+		},
+		VMSpecName: config.Cloudit.VMFromMyImage.VmSpecName,
+		KeyPairIID: irs.IID{
+			NameId: config.Cloudit.VMFromMyImage.KeyPairIID.NameId,
+		},
+		SecurityGroupIIDs: SecurityGroupIIDs,
+		RootDiskSize:      "",
+		RootDiskType:      "",
+		VMUserId:          config.Cloudit.VMFromMyImage.VMUserId,
+		VMUserPasswd:      config.Cloudit.VMFromMyImage.VMUserPasswd,
 	}
 
 Loop:
@@ -660,6 +699,14 @@ Loop:
 				}
 				res_cblogger.Info("Finish TerminateVM()")
 			case 10:
+				res_cblogger.Info("Start StartVM() - from MyImage ...")
+				if vmStatus, err := vmHandler.StartVM(vmFromSnapshotReqInfo); err != nil {
+					res_cblogger.Error(err)
+				} else {
+					spew.Dump(vmStatus)
+				}
+				res_cblogger.Info("Finish StartVM() - from MyImage ...")
+			case 11:
 				res_cblogger.Info("Exit")
 				break Loop
 			}
@@ -854,6 +901,210 @@ Loop:
 	}
 }
 
+func testDiskHandlerListPrint() {
+	res_cblogger.Info("Test DiskHandler")
+	res_cblogger.Info("0. Print Menu")
+	res_cblogger.Info("1. ListDisk()")
+	res_cblogger.Info("2. GetDisk()")
+	res_cblogger.Info("3. CreateDisk()")
+	res_cblogger.Info("4. DeleteDisk()")
+	res_cblogger.Info("5. ChangeDiskSize()")
+	res_cblogger.Info("6. AttachDisk()")
+	res_cblogger.Info("7. DetachDisk()")
+	res_cblogger.Info("8. Exit")
+}
+
+func testDiskHandler(config ResourceConfig) {
+	resourceHandler, err := getResourceHandler("disk", config)
+	if err != nil {
+		res_cblogger.Error(err)
+		return
+	}
+
+	diskHandler := resourceHandler.(irs.DiskHandler)
+
+	testDiskHandlerListPrint()
+	configdisk := config.Cloudit.DISK
+
+	diskCreateReqInfo := irs.DiskInfo{
+		IId: irs.IID{
+			NameId: configdisk.IID.NameId,
+		},
+		DiskSize: configdisk.DiskSize,
+	}
+	diskIId := irs.IID{
+		NameId: configdisk.IID.NameId,
+	}
+	vmIID := irs.IID{
+		NameId: config.Cloudit.VM.IID.NameId,
+	}
+Loop:
+	for {
+		var commandNum int
+		inputCnt, err := fmt.Scan(&commandNum)
+		if err != nil {
+			res_cblogger.Error(err)
+		}
+
+		if inputCnt == 1 {
+			switch commandNum {
+			case 0:
+				testDiskHandlerListPrint()
+			case 1:
+				res_cblogger.Info("Start ListDisk() ...")
+				if list, err := diskHandler.ListDisk(); err != nil {
+					res_cblogger.Error(err)
+				} else {
+					spew.Dump(list)
+				}
+				res_cblogger.Info("Finish ListDisk()")
+			case 2:
+				res_cblogger.Info("Start GetDisk() ...")
+				if vm, err := diskHandler.GetDisk(diskIId); err != nil {
+					res_cblogger.Error(err)
+				} else {
+					spew.Dump(vm)
+				}
+				res_cblogger.Info("Finish GetDisk()")
+			case 3:
+				res_cblogger.Info("Start CreateDisk() ...")
+				if createInfo, err := diskHandler.CreateDisk(diskCreateReqInfo); err != nil {
+					res_cblogger.Error(err)
+				} else {
+					spew.Dump(createInfo)
+				}
+				res_cblogger.Info("Finish CreateDisk()")
+			case 4:
+				res_cblogger.Info("Start DeleteDisk() ...")
+				if vmStatus, err := diskHandler.DeleteDisk(diskIId); err != nil {
+					res_cblogger.Error(err)
+				} else {
+					spew.Dump(vmStatus)
+				}
+				res_cblogger.Info("Finish DeleteDisk()")
+			case 5:
+				res_cblogger.Info("Start ChangeDiskSize() [+ 10G] ...")
+
+				// set new size
+				intSize, _ := strconv.Atoi(configdisk.DiskSize)
+				intSize += 10
+
+				if nlbInfo, err := diskHandler.ChangeDiskSize(diskIId, strconv.Itoa(intSize)); err != nil {
+					res_cblogger.Error(err)
+				} else {
+					spew.Dump(nlbInfo)
+				}
+				res_cblogger.Info("Finish ChangeDiskSize() [+ 10G]")
+			case 6:
+				res_cblogger.Info("Start AttachDisk() ...")
+				if info, err := diskHandler.AttachDisk(diskIId, vmIID); err != nil {
+					res_cblogger.Error(err)
+				} else {
+					spew.Dump(info)
+				}
+				res_cblogger.Info("Finish AttachDisk()")
+			case 7:
+				res_cblogger.Info("Start DetachDisk() ...")
+				if info, err := diskHandler.DetachDisk(diskIId, vmIID); err != nil {
+					res_cblogger.Error(err)
+				} else {
+					spew.Dump(info)
+				}
+				res_cblogger.Info("Finish DetachDisk()")
+			case 8:
+				res_cblogger.Info("Exit")
+				break Loop
+			}
+		}
+	}
+}
+
+func testMyImageHandlerListPrint() {
+	res_cblogger.Info("Test MyImageHandler")
+	res_cblogger.Info("0. Print Menu")
+	res_cblogger.Info("1. ListMyImage()")
+	res_cblogger.Info("2. GetMyImage()")
+	res_cblogger.Info("3. CreateMyImage()")
+	res_cblogger.Info("4. DeleteMyImage()")
+	res_cblogger.Info("5. Exit")
+}
+
+func testMyImageHandler(config ResourceConfig) {
+	resourceHandler, err := getResourceHandler("myimage", config)
+	if err != nil {
+		res_cblogger.Error(err)
+		return
+	}
+
+	myImageHandler := resourceHandler.(irs.MyImageHandler)
+
+	testMyImageHandlerListPrint()
+	configmyimage := config.Cloudit.MYIMAGE
+
+	snapshotCreateReqInfo := irs.MyImageInfo{
+		IId: irs.IID{
+			NameId: configmyimage.IID.NameId,
+		},
+		SourceVM: irs.IID{
+			NameId: configmyimage.SourceVMIID.NameId,
+		},
+	}
+	myImageIId := irs.IID{
+		NameId:   configmyimage.IID.NameId,
+		SystemId: configmyimage.IID.SystemId,
+	}
+Loop:
+	for {
+		var commandNum int
+		inputCnt, err := fmt.Scan(&commandNum)
+		if err != nil {
+			res_cblogger.Error(err)
+		}
+
+		if inputCnt == 1 {
+			switch commandNum {
+			case 0:
+				testMyImageHandlerListPrint()
+			case 1:
+				res_cblogger.Info("Start ListMyImage() ...")
+				if list, err := myImageHandler.ListMyImage(); err != nil {
+					res_cblogger.Error(err)
+				} else {
+					spew.Dump(list)
+				}
+				res_cblogger.Info("Finish ListMyImage()")
+			case 2:
+				res_cblogger.Info("Start GetMyImage() ...")
+				if vm, err := myImageHandler.GetMyImage(myImageIId); err != nil {
+					res_cblogger.Error(err)
+				} else {
+					spew.Dump(vm)
+				}
+				res_cblogger.Info("Finish GetMyImage()")
+			case 3:
+				res_cblogger.Info("Start CreateMyImage() ...")
+				if createInfo, err := myImageHandler.SnapshotVM(snapshotCreateReqInfo); err != nil {
+					res_cblogger.Error(err)
+				} else {
+					spew.Dump(createInfo)
+				}
+				res_cblogger.Info("Finish CreateMyImage()")
+			case 4:
+				res_cblogger.Info("Start DeleteMyImage() ...")
+				if vmStatus, err := myImageHandler.DeleteMyImage(myImageIId); err != nil {
+					res_cblogger.Error(err)
+				} else {
+					spew.Dump(vmStatus)
+				}
+				res_cblogger.Info("Finish DeleteMyImage()")
+			case 5:
+				res_cblogger.Info("Exit")
+				break Loop
+			}
+		}
+	}
+}
+
 func showTestHandlerInfo() {
 	res_cblogger.Info("==========================================================")
 	res_cblogger.Info("[Test ResourceHandler]")
@@ -864,7 +1115,9 @@ func showTestHandlerInfo() {
 	res_cblogger.Info("5. VmSpecHandler")
 	res_cblogger.Info("6. VmHandler")
 	res_cblogger.Info("7. NLBHandler")
-	res_cblogger.Info("8. Exit")
+	res_cblogger.Info("8. DiskHandler")
+	res_cblogger.Info("9. MyImageHandler")
+	res_cblogger.Info("10. Exit")
 	res_cblogger.Info("==========================================================")
 }
 
@@ -907,6 +1160,12 @@ Loop:
 				testNLBHandler(config)
 				showTestHandlerInfo()
 			case 8:
+				testDiskHandler(config)
+				showTestHandlerInfo()
+			case 9:
+				testMyImageHandler(config)
+				showTestHandlerInfo()
+			case 10:
 				fmt.Println("Exit Test ResourceHandler Program")
 				break Loop
 			}
@@ -922,6 +1181,7 @@ type ResourceConfig struct {
 		IdentityEndpoint string `yaml:"identity_endpoint"`
 		AuthToken        string `yaml:"auth_token"`
 		TenantID         string `yaml:"tenant_id"`
+		ClusterID        string `yaml:"cluster_id"`
 		ServerId         string `yaml:"server_id"`
 		VM               struct {
 			IID struct {
@@ -950,7 +1210,40 @@ type ResourceConfig struct {
 				SystemId string `yaml:"systemId"`
 			} `yaml:"SecurityGroupIIDs"`
 			VMUserPasswd string `yaml:"VMUserPasswd"`
+			DataDiskIIDs []struct {
+				NameId   string `yaml:"nameId"`
+				SystemId string `yaml:"systemId"`
+			} `yaml:"DataDiskIIDs"`
 		} `yaml:"vm"`
+		VMFromMyImage struct {
+			IID struct {
+				NameId   string `yaml:"nameId"`
+				SystemId string `yaml:"systemId"`
+			} `yaml:"IID"`
+			ImageIID struct {
+				NameId   string `yaml:"nameId"`
+				SystemId string `yaml:"systemId"`
+			} `yaml:"ImageIID"`
+			VmSpecName string `yaml:"VmSpecName"`
+			KeyPairIID struct {
+				NameId   string `yaml:"nameId"`
+				SystemId string `yaml:"systemId"`
+			} `yaml:"KeyPairIID"`
+			VpcIID struct {
+				NameId   string `yaml:"nameId"`
+				SystemId string `yaml:"systemId"`
+			} `yaml:"VpcIID"`
+			SubnetIID struct {
+				NameId   string `yaml:"nameId"`
+				SystemId string `yaml:"systemId"`
+			} `yaml:"SubnetIID"`
+			SecurityGroupIIDs []struct {
+				NameId   string `yaml:"nameId"`
+				SystemId string `yaml:"systemId"`
+			} `yaml:"SecurityGroupIIDs"`
+			VMUserId     string `yaml:"VMUserId"`
+			VMUserPasswd string `yaml:"VMUserPasswd"`
+		} `yaml:"vmFromMyImage"`
 		Resources struct {
 			ImageIID struct {
 				NameId   string `yaml:"nameId"`
@@ -1063,6 +1356,22 @@ type ResourceConfig struct {
 				SystemId string `yaml:"systemId"`
 			} `yaml:"RemoveVMs"`
 		} `yaml:"nlb"`
+		DISK struct {
+			IID struct {
+				NameId   string `yaml:"nameId"`
+				SystemId string `yaml:"systemId"`
+			} `yaml:"IID"`
+			DiskSize string `yaml:"DiskSize"`
+		} `yaml:"disk"`
+		MYIMAGE struct {
+			IID struct {
+				NameId   string `yaml:"nameId"`
+				SystemId string `yaml:"systemId"`
+			} `yaml:"IID"`
+			SourceVMIID struct {
+				NameId string `yaml:"nameId"`
+			} `yaml:"SourceVMIID"`
+		} `yaml:"myimage"`
 	} `yaml:"cloudit"`
 }
 

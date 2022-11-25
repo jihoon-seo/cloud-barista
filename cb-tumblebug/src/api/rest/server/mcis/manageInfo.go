@@ -34,15 +34,18 @@ type JSONResult struct {
 // Annotation for API documention Need to be revised.
 
 // RestGetMcis godoc
-// @Summary Get MCIS object (option: status, vmID)
-// @Description Get MCIS object (option: status, vmID)
+// @Summary Get MCIS object (option: status, accessInfo, vmId)
+// @Description Get MCIS object (option: status, accessInfo, vmId)
 // @Tags [Infra service] MCIS Provisioning management
 // @Accept  json
 // @Produce  json
 // @Param nsId path string true "Namespace ID" default(ns01)
 // @Param mcisId path string true "MCIS ID" default(mcis01)
-// @Param option query string false "Option" Enums(default, id, status)
-// @success 200 {object} JSONResult{[DEFAULT]=mcis.TbMcisInfo,[ID]=common.IdList,[STATUS]=mcis.McisStatusInfo} "Different return structures by the given action param"
+// @Param option query string false "Option" Enums(default, id, status, accessinfo)
+// @Param filterKey query string false "(For option=id) Field key for filtering (ex: connectionName)"
+// @Param filterVal query string false "(For option=id) Field value for filtering (ex: aws-ap-northeast-2)"
+// @Param accessInfoOption query string false "(For option=accessinfo) accessInfoOption (showSshKey)"
+// @success 200 {object} JSONResult{[DEFAULT]=mcis.TbMcisInfo,[ID]=common.IdList,[STATUS]=mcis.McisStatusInfo,[AccessInfo]=mcis.McisAccessInfo} "Different return structures by the given action param"
 // @Failure 404 {object} common.SimpleMsg
 // @Failure 500 {object} common.SimpleMsg
 // @Router /ns/{nsId}/mcis/{mcisId} [get]
@@ -52,11 +55,14 @@ func RestGetMcis(c echo.Context) error {
 	mcisId := c.Param("mcisId")
 
 	option := c.QueryParam("option")
+	filterKey := c.QueryParam("filterKey")
+	filterVal := c.QueryParam("filterVal")
+	accessInfoOption := c.QueryParam("accessInfoOption")
 
 	if option == "id" {
 		content := common.IdList{}
 		var err error
-		content.IdList, err = mcis.ListVmId(nsId, mcisId)
+		content.IdList, err = mcis.ListVmByFilter(nsId, mcisId, filterKey, filterVal)
 		if err != nil {
 			mapA := map[string]string{"message": err.Error()}
 			return c.JSON(http.StatusInternalServerError, &mapA)
@@ -78,6 +84,17 @@ func RestGetMcis(c echo.Context) error {
 
 		common.PrintJsonPretty(content)
 		return c.JSON(http.StatusOK, &content)
+
+	} else if option == "accessinfo" {
+
+		result, err := mcis.GetMcisAccessInfo(nsId, mcisId, accessInfoOption)
+		if err != nil {
+			mapA := map[string]string{"message": err.Error()}
+			return c.JSON(http.StatusInternalServerError, &mapA)
+		}
+
+		common.PrintJsonPretty(result)
+		return c.JSON(http.StatusOK, &result)
 
 	} else {
 
@@ -166,7 +183,9 @@ func RestGetAllMcis(c echo.Context) error {
 
 }
 
-/* function RestPutMcis not yet implemented
+/*
+	function RestPutMcis not yet implemented
+
 // RestPutMcis godoc
 // @Summary Update MCIS
 // @Description Update MCIS
@@ -178,10 +197,10 @@ func RestGetAllMcis(c echo.Context) error {
 // @Failure 404 {object} common.SimpleMsg
 // @Failure 500 {object} common.SimpleMsg
 // @Router /ns/{nsId}/mcis/{mcisId} [put]
-*/
 func RestPutMcis(c echo.Context) error {
 	return nil
 }
+*/
 
 // RestDelMcis godoc
 // @Summary Delete MCIS
@@ -192,7 +211,7 @@ func RestPutMcis(c echo.Context) error {
 // @Param nsId path string true "Namespace ID" default(ns01)
 // @Param mcisId path string true "MCIS ID" default(mcis01)
 // @Param option query string false "Option for delete MCIS (support force delete)" Enums(terminate,force)
-// @Success 200 {object} common.SimpleMsg
+// @Success 200 {object} common.IdList
 // @Failure 404 {object} common.SimpleMsg
 // @Router /ns/{nsId}/mcis/{mcisId} [delete]
 func RestDelMcis(c echo.Context) error {
@@ -201,15 +220,14 @@ func RestDelMcis(c echo.Context) error {
 	mcisId := c.Param("mcisId")
 	option := c.QueryParam("option")
 
-	err := mcis.DelMcis(nsId, mcisId, option)
+	output, err := mcis.DelMcis(nsId, mcisId, option)
 	if err != nil {
 		common.CBLog.Error(err)
 		mapA := map[string]string{"message": err.Error()}
 		return c.JSON(http.StatusInternalServerError, &mapA)
 	}
 
-	mapA := map[string]string{"message": "Deleted the MCIS " + mcisId}
-	return c.JSON(http.StatusOK, &mapA)
+	return c.JSON(http.StatusOK, output)
 }
 
 // RestDelAllMcis godoc
@@ -227,7 +245,7 @@ func RestDelAllMcis(c echo.Context) error {
 	nsId := c.Param("nsId")
 	option := c.QueryParam("option")
 
-	result, err := mcis.CoreDelAllMcis(nsId, option)
+	result, err := mcis.DelAllMcis(nsId, option)
 	if err != nil {
 		mapA := map[string]string{"message": err.Error()}
 		return c.JSON(http.StatusInternalServerError, &mapA)
@@ -238,7 +256,7 @@ func RestDelAllMcis(c echo.Context) error {
 }
 
 // TODO: swag does not support multiple response types (success 200) in an API.
-// Annotation for API documention Need to be revised.
+// Annotation for API documention needs to be revised.
 
 // RestGetMcisVm godoc
 // @Summary Get VM in specified MCIS
@@ -248,9 +266,9 @@ func RestDelAllMcis(c echo.Context) error {
 // @Produce  json
 // @Param nsId path string true "Namespace ID" default(ns01)
 // @Param mcisId path string true "MCIS ID" default(mcis01)
-// @Param vmId path string true "VM ID" default(vm01)
-// @Param option query string false "Option for MCIS" Enums(default, status)
-// @success 200 {object} JSONResult{[DEFAULT]=mcis.TbVmInfo,[STATUS]=mcis.TbVmStatusInfo} "Different return structures by the given option param"
+// @Param vmId path string true "VM ID" default(g1-1)
+// @Param option query string false "Option for MCIS" Enums(default, status, idsInDetail)
+// @success 200 {object} JSONResult{[DEFAULT]=mcis.TbVmInfo,[STATUS]=mcis.TbVmStatusInfo,[IDNAME]=mcis.TbIdNameInDetailInfo} "Different return structures by the given option param"
 // @Failure 404 {object} common.SimpleMsg
 // @Failure 500 {object} common.SimpleMsg
 // @Router /ns/{nsId}/mcis/{mcisId}/vm/{vmId} [get]
@@ -262,8 +280,8 @@ func RestGetMcisVm(c echo.Context) error {
 
 	option := c.QueryParam("option")
 
-	if option == "status" {
-
+	switch option {
+	case "status":
 		result, err := mcis.CoreGetMcisVmStatus(nsId, mcisId, vmId)
 		if err != nil {
 			common.CBLog.Error(err)
@@ -275,8 +293,17 @@ func RestGetMcisVm(c echo.Context) error {
 
 		return c.JSON(http.StatusOK, result)
 
-	} else {
+	case "idsInDetail":
+		result, err := mcis.GetVmIdNameInDetail(nsId, mcisId, vmId)
+		if err != nil {
+			common.CBLog.Error(err)
+			mapA := map[string]string{"message": err.Error()}
+			return c.JSON(http.StatusInternalServerError, &mapA)
+		}
 
+		return c.JSON(http.StatusOK, result)
+
+	default:
 		result, err := mcis.CoreGetMcisVmInfo(nsId, mcisId, vmId)
 		if err != nil {
 			mapA := map[string]string{"message": err.Error()}
@@ -286,7 +313,6 @@ func RestGetMcisVm(c echo.Context) error {
 		common.PrintJsonPretty(*result)
 
 		return c.JSON(http.StatusOK, result)
-
 	}
 }
 
@@ -299,16 +325,16 @@ func RestGetMcisVm(c echo.Context) error {
 // @Produce  json
 // @Param nsId path string true "Namespace ID" default(ns01)
 // @Param mcisId path string true "MCIS ID" default(mcis01)
-// @Param vmId path string true "VM ID" default(vm01)
+// @Param vmId path string true "VM ID" default(g1-1)
 // @Param vmInfo body mcis.TbVmInfo true "Details for an VM object"
 // @Success 200 {object} mcis.TbVmInfo
 // @Failure 404 {object} common.SimpleMsg
 // @Failure 500 {object} common.SimpleMsg
 // @Router /ns/{nsId}/mcis/{mcisId}/vm/{vmId} [put]
-*/
 func RestPutMcisVm(c echo.Context) error {
 	return nil
 }
+*/
 
 // RestDelMcisVm godoc
 // @Summary Delete VM in specified MCIS
@@ -318,7 +344,7 @@ func RestPutMcisVm(c echo.Context) error {
 // @Produce  json
 // @Param nsId path string true "Namespace ID" default(ns01)
 // @Param mcisId path string true "MCIS ID" default(mcis01)
-// @Param vmId path string true "VM ID" default(vm01)
+// @Param vmId path string true "VM ID" default(g1-1)
 // @Param option query string false "Option for delete VM (support force delete)" Enums(force)
 // @Success 200 {object} common.SimpleMsg
 // @Failure 404 {object} common.SimpleMsg
@@ -339,4 +365,67 @@ func RestDelMcisVm(c echo.Context) error {
 
 	mapA := map[string]string{"message": "Deleted the VM info"}
 	return c.JSON(http.StatusOK, &mapA)
+}
+
+// RestGetMcisGroupVms godoc
+// @Summary List VMs with a SubGroup label in a specified MCIS
+// @Description List VMs with a SubGroup label in a specified MCIS
+// @Tags [Infra service] MCIS Provisioning management
+// @Accept  json
+// @Produce  json
+// @Param nsId path string true "Namespace ID" default(ns01)
+// @Param mcisId path string true "MCIS ID" default(mcis01)
+// @Param subgroupId path string true "subGroup ID" default(g1)
+// @Param option query string false "Option" Enums(id)
+// @Success 200 {object} common.IdList
+// @Failure 404 {object} common.SimpleMsg
+// @Failure 500 {object} common.SimpleMsg
+// @Router /ns/{nsId}/mcis/{mcisId}/subgroup/{subgroupId} [get]
+func RestGetMcisGroupVms(c echo.Context) error {
+
+	nsId := c.Param("nsId")
+	mcisId := c.Param("mcisId")
+	subgroupId := c.Param("subgroupId")
+	//option := c.QueryParam("option")
+
+	content := common.IdList{}
+	var err error
+	content.IdList, err = mcis.ListMcisGroupVms(nsId, mcisId, subgroupId)
+	if err != nil {
+		mapA := map[string]string{"message": err.Error()}
+		return c.JSON(http.StatusNotFound, &mapA)
+	}
+
+	return c.JSON(http.StatusOK, &content)
+
+}
+
+// RestGetMcisGroupIds godoc
+// @Summary List SubGroup IDs in a specified MCIS
+// @Description List SubGroup IDs in a specified MCIS
+// @Tags [Infra service] MCIS Provisioning management
+// @Accept  json
+// @Produce  json
+// @Param nsId path string true "Namespace ID" default(ns01)
+// @Param mcisId path string true "MCIS ID" default(mcis01)
+// @Success 200 {object} common.IdList
+// @Failure 404 {object} common.SimpleMsg
+// @Failure 500 {object} common.SimpleMsg
+// @Router /ns/{nsId}/mcis/{mcisId}/subgroup [get]
+func RestGetMcisGroupIds(c echo.Context) error {
+
+	nsId := c.Param("nsId")
+	mcisId := c.Param("mcisId")
+	//option := c.QueryParam("option")
+
+	content := common.IdList{}
+	var err error
+	content.IdList, err = mcis.ListSubGroupId(nsId, mcisId)
+	if err != nil {
+		mapA := map[string]string{"message": err.Error()}
+		return c.JSON(http.StatusNotFound, &mapA)
+	}
+
+	return c.JSON(http.StatusOK, &content)
+
 }

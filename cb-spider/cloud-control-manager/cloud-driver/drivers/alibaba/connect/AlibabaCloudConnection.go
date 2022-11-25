@@ -1,19 +1,19 @@
-// Proof of Concepts of CB-Spider.
+// Alibaba Driver of CB-Spider.
 // The CB-Spider is a sub-Framework of the Cloud-Barista Multi-Cloud Project.
 // The CB-Spider Mission is to connect all the clouds with a single interface.
 //
 //      * Cloud-Barista: https://github.com/cloud-barista
 //
-// This is a Cloud Driver Example for PoC Test.
+// This is Alibaba Driver.
 //
-// by zephy@mz.co.kr, 2019.09.
+// by CB-Spider Team, 2022.09.
 
 package connect
 
 import (
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
+	"github.com/aliyun/alibaba-cloud-sdk-go/services/slb"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/vpc"
-
 	cblog "github.com/cloud-barista/cb-log"
 	alirs "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/drivers/alibaba/resources"
 	idrv "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/interfaces"
@@ -31,7 +31,8 @@ func init() {
 }
 
 type AlibabaCloudConnection struct {
-	Region idrv.RegionInfo
+	CredentialInfo idrv.CredentialInfo
+	Region         idrv.RegionInfo
 
 	VMClient      *ecs.Client
 	KeyPairClient *ecs.Client
@@ -41,16 +42,19 @@ type AlibabaCloudConnection struct {
 	//VNetClient          *vpc.Client
 	VpcClient *vpc.Client
 	//VNicClient          *ecs.Client
-	SubnetClient *vpc.Client
-	VmSpecClient *ecs.Client
+	SubnetClient  *vpc.Client
+	VmSpecClient  *ecs.Client
+	NLBClient     *slb.Client
+	DiskClient    *ecs.Client
+	MyImageClient *ecs.Client
 }
 
 /*
-func (cloudConn *AlibabaCloudConnection) CreateVNetworkHandler() (irs.VNetworkHandler, error) {
-	cblogger.Info("Alibaba Cloud Driver: called CreateVNetworkHandler()!")
-	vNetHandler := alirs.AlibabaVNetworkHandler{cloudConn.Region, cloudConn.VNetClient}
-	return &vNetHandler, nil
-}
+	func (cloudConn *AlibabaCloudConnection) CreateVNetworkHandler() (irs.VNetworkHandler, error) {
+		cblogger.Info("Alibaba Cloud Driver: called CreateVNetworkHandler()!")
+		vNetHandler := alirs.AlibabaVNetworkHandler{cloudConn.Region, cloudConn.VNetClient}
+		return &vNetHandler, nil
+	}
 */
 func (cloudConn *AlibabaCloudConnection) CreateVPCHandler() (irs.VPCHandler, error) {
 	cblogger.Info("Alibaba Cloud Driver: called CreateVPCHandler()!")
@@ -105,6 +109,36 @@ func (cloudConn *AlibabaCloudConnection) CreateVMSpecHandler() (irs.VMSpecHandle
 	return &handler, nil
 }
 
+func (cloudConn *AlibabaCloudConnection) CreateNLBHandler() (irs.NLBHandler, error) {
+	cblogger.Info("Start")
+	handler := alirs.AlibabaNLBHandler{cloudConn.Region, cloudConn.NLBClient, cloudConn.VMClient, cloudConn.VpcClient}
+	return &handler, nil
+}
+
+func (cloudConn *AlibabaCloudConnection) CreateDiskHandler() (irs.DiskHandler, error) {
+	cblogger.Info("Start")
+	handler := alirs.AlibabaDiskHandler{cloudConn.Region, cloudConn.DiskClient}
+	return &handler, nil
+}
+
+func (cloudConn *AlibabaCloudConnection) CreateMyImageHandler() (irs.MyImageHandler, error) {
+	cblogger.Info("Start")
+	handler := alirs.AlibabaMyImageHandler{cloudConn.Region, cloudConn.MyImageClient}
+	return &handler, nil
+
+}
+
+func (cloudConn *AlibabaCloudConnection) CreateClusterHandler() (irs.ClusterHandler, error) {
+	cblogger.Info("Alibaba Cloud Driver: called CreateClusterHandler()!")
+
+	// temp
+	// getEnv & Setting
+	clusterHandler := alirs.AlibabaClusterHandler{RegionInfo: cloudConn.Region, CredentialInfo: cloudConn.CredentialInfo}
+
+	return &clusterHandler, nil
+
+}
+
 func (AlibabaCloudConnection) IsConnected() (bool, error) {
 	return true, nil
 }
@@ -113,7 +147,7 @@ func (AlibabaCloudConnection) Close() error {
 	return nil
 }
 
-func (cloudConn *AlibabaCloudConnection) CreateNLBHandler() (irs.NLBHandler, error) {
-        return nil, errors.New("Alibaba Cloud Driver NLB: WIP")
+func (cloudConn *AlibabaCloudConnection) CreateAnyCallHandler() (irs.AnyCallHandler, error) {
+        return nil, errors.New("GCP Driver: not implemented")
 }
 

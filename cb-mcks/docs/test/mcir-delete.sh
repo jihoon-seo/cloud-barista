@@ -2,7 +2,7 @@
 # ------------------------------------------------------------------------------
 # usage
 if [ "$#" -lt 1 ]; then 
-	echo "./mcir-delete.sh <namespace> [all/image/spec/ssh/sg/vpc]"
+	echo "./mcir-delete.sh <namespace> [all/image/spec/ssh/sg/nlb/vpc]"
 	echo "./mcir-delete.sh cb-mcks-ns all"
 	exit 0
 fi
@@ -57,6 +57,7 @@ delete() {
 	if [[ "${v_QUERY}" == *"sg"* ]]; then	echo "@_SECURITYGROUP_@";		curl -sX DELETE ${NM_TUMBLEBUG_NS}/resources/securityGroup   -H "${c_AUTH}" -H "${c_CT}" -o /dev/null -w "SECURITYGROUP.delete():%{http_code}\n"; fi
 	# vpc
 	if [[ "${v_QUERY}" == *"vpc"* ]]; then	echo "@_VPC_@";		curl -sX DELETE ${NM_TUMBLEBUG_NS}/resources/vNet   -H "${c_AUTH}" -H "${c_CT}" -o /dev/null -w "VNET.delete():%{http_code}\n"; fi
+	
 
 }
 

@@ -107,7 +107,7 @@ func (self *Provisioner) BindVM(vms []tumblebug.VM) ([]*model.Node, error) {
 		if machine != nil {
 			machine.PublicIP = vm.PublicIP
 			machine.PrivateIP = vm.PrivateIP
-			machine.Username = vm.UserAccount
+			machine.Username = lang.NVL(vm.UserAccount, tumblebug.VM_USER_ACCOUNT)
 			machine.Region = lang.NVL(vm.Region.Region, machine.Region) // region, zone 공백인 경우가 간혹 있음
 			machine.Zone = lang.NVL(vm.Region.Zone, machine.Zone)
 			machine.Spec = vm.CspViewVmDetail.VMSpecName
@@ -132,7 +132,7 @@ func (self *Provisioner) Bootstrap() error {
 			if err := machine.ConnectionTest(); err != nil {
 				return err
 			}
-			if err := machine.bootstrap(self.Cluster.NetworkCni, self.Cluster.Version); err != nil {
+			if err := machine.bootstrap(self.Cluster); err != nil {
 				return err
 			}
 			return nil
@@ -162,18 +162,62 @@ func (self *Provisioner) InstallHAProxy() error {
 
 	return nil
 }
+func (self *Provisioner) InitExternalEtcd() error {
+	var ips string
+	var hosts string
+
+	for _, machine := range self.ControlPlaneMachines {
+		ips += fmt.Sprintf("%s ", machine.PrivateIP)
+		hosts += fmt.Sprintf("%s %s ", machine.Name, machine.PrivateIP)
+	}
+	if _, err := self.leader.executeSSH("sudo echo '%s'>$HOME/id_rsa; sudo mv $HOME/id_rsa $HOME/.ssh/id_rsa; sudo chmod 600 $HOME/.ssh/id_rsa", self.leader.Credential); err != nil {
+		return errors.New(fmt.Sprintf("Failed to create private-key."))
+	}
+	if _, err := self.leader.executeSSH(REMOTE_TARGET_PATH+"/etcd-ca.sh %s", ips); err != nil {
+		return errors.New(fmt.Sprintf("Failed to create etcd certificates. (etcd-ca.sh)"))
+	}
+	for _, machine := range self.ControlPlaneMachines {
+		if _, err := self.leader.executeSSH("scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -r /tmp/ca/* cb-user@%s:", machine.PublicIP); err != nil {
+			return errors.New(fmt.Sprintf("[%s] Failed to copy certificate.", machine.Name))
+		}
+
+		if _, err := machine.executeSSH(REMOTE_TARGET_PATH+"/etcd-conf.sh %s", hosts); err != nil {
+			return errors.New(fmt.Sprintf("[%s] Failed to configure etcd cluster. (etcd-conf.sh)", machine.Name))
+		}
+	}
+	return nil
+}
 
 // coantrol-plane init
 func (self *Provisioner) InitControlPlane(kubernetesConfigReq app.ClusterConfigKubernetesReq) ([]string, string, error) {
 
 	var joinCmd []string
-
-	if output, err := self.leader.executeSSH("cd %s;./%s %s %s %s %s", REMOTE_TARGET_PATH, "k8s-init.sh", kubernetesConfigReq.PodCidr, kubernetesConfigReq.ServiceCidr, kubernetesConfigReq.ServiceDnsDomain, self.leader.PublicIP); err != nil {
-		return nil, "", errors.New("Failed to initialize control-plane. (k8s-init.sh)")
-	} else if strings.Contains(output, "Your Kubernetes control-plane has initialized successfully") {
-		joinCmd = getJoinCmd(output)
+	var port string
+	if self.Cluster.Loadbalancer == app.LB_HAPROXY {
+		port = "9998"
 	} else {
-		return nil, "", errors.New("to initialize control-plane (the output not contains 'Your Kubernetes control-plane has initialized successfully')")
+		port = "6443"
+	}
+	if self.Cluster.Etcd == app.ETCD_EXTERNAL {
+		var etcdIp string
+		for _, machine := range self.ControlPlaneMachines {
+			etcdIp += fmt.Sprintf("%s ", machine.PrivateIP)
+		}
+		if output, err := self.leader.executeSSH("cd %s;./%s %s %s %s %s %s %s", REMOTE_TARGET_PATH, "k8s-init-etcd.sh", kubernetesConfigReq.PodCidr, kubernetesConfigReq.ServiceCidr, kubernetesConfigReq.ServiceDnsDomain, self.leader.PublicIP, port, etcdIp); err != nil {
+			return nil, "", errors.New("Failed to initialize control-plane. (k8s-init-etcd.sh)")
+		} else if strings.Contains(output, "Your Kubernetes control-plane has initialized successfully") {
+			joinCmd = getJoinCmd(output)
+		} else {
+			return nil, "", errors.New("to initialize control-plane (the output not contains 'Your Kubernetes control-plane has initialized successfully')")
+		}
+	} else {
+		if output, err := self.leader.executeSSH("cd %s;./%s %s %s %s %s %s", REMOTE_TARGET_PATH, "k8s-init.sh", kubernetesConfigReq.PodCidr, kubernetesConfigReq.ServiceCidr, kubernetesConfigReq.ServiceDnsDomain, self.leader.PublicIP, port); err != nil {
+			return nil, "", errors.New("Failed to initialize control-plane. (k8s-init.sh)")
+		} else if strings.Contains(output, "Your Kubernetes control-plane has initialized successfully") {
+			joinCmd = getJoinCmd(output)
+		} else {
+			return nil, "", errors.New("to initialize control-plane (the output not contains 'Your Kubernetes control-plane has initialized successfully')")
+		}
 	}
 
 	ouput, _ := self.leader.executeSSH("sudo cat /etc/kubernetes/admin.conf")
@@ -196,6 +240,28 @@ func (self *Provisioner) InstallNetworkCni() error {
 	for _, file := range cniYamls {
 		if _, err := self.Kubectl("apply -f %s/%s", REMOTE_TARGET_PATH, file); err != nil {
 			return err
+		}
+	}
+
+	return nil
+}
+
+func (self *Provisioner) InstallStorageClassNFS(storageReq app.ClusterStorageClassNfsReq) error {
+
+	storageYamls := []string{}
+	if storageReq.Server != "" {
+		storageYamls = append(storageYamls, SC_NFS_RBAC_FILE)
+		storageYamls = append(storageYamls, SC_NFS_CLASS_FILE)
+	}
+
+	for _, file := range storageYamls {
+		if _, err := self.Kubectl("apply -f %s/%s", REMOTE_TARGET_PATH, file); err != nil {
+			return err
+		}
+	}
+	if storageReq.Server != "" {
+		if _, err := self.leader.executeSSH("cd %s;./%s %s %s ", REMOTE_TARGET_PATH, "addons/nfs/deploy_v4.0.16.sh", storageReq.Path, storageReq.Server); err != nil {
+			return errors.New("Failed to setup storageCalss controla-plane.")
 		}
 	}
 

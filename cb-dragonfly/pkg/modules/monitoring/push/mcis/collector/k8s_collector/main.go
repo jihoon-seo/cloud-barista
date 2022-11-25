@@ -65,7 +65,7 @@ func main() {
 	aggregateType := types.AVG
 	namespace := os.Getenv("namespace")
 	dfAddr := os.Getenv("df_addr")
-	collectInterval, _ := strconv.Atoi(os.Getenv("collect_interval"))
+	collectInterval, _ := strconv.Atoi(os.Getenv("mcis_collector_interval"))
 	collectorUUID := os.Getenv("collect_uuid")
 	if kafkaEndpointUrl == "" || namespace == "" || dfAddr == "" {
 		fmt.Println("Get Env Error")
@@ -75,19 +75,17 @@ func main() {
 
 	/** Set Kafka, ConfigMap Conn Start */
 	KafkaConfig = &kafka.ConfigMap{
-		//"bootstrap.servers":  fmt.Sprintf("%s", config.GetDefaultConfig().GetKafkaConfig().EndpointUrl),
 		"bootstrap.servers":  kafkaEndpointUrl,
-		"group.id":           fmt.Sprintf("%d", createOrder),
+		"group.id":           fmt.Sprintf("mck8s-%d", createOrder),
 		"enable.auto.commit": true,
-		//"session.timeout.ms": 15000,
-		"auto.offset.reset": "earliest",
+		"auto.offset.reset":  "earliest",
 	}
 	consumerKafkaConn, err := kafka.NewConsumer(KafkaConfig)
 	PrintPanicError(err)
-	config, errK8s := rest.InClusterConfig()
-	PrintPanicError(errK8s)
-	clientSet, errK8s2 := kubernetes.NewForConfig(config)
-	PrintPanicError(errK8s2)
+	config, err := rest.InClusterConfig()
+	PrintPanicError(err)
+	clientSet, err := kubernetes.NewForConfig(config)
+	PrintPanicError(err)
 	/** Set Kafka, ConfigMap Conn End */
 
 	/** Operate Collector Start */
@@ -107,7 +105,7 @@ func main() {
 		fmt.Println(fmt.Sprintf("#### Group_%d collector ####", createOrder))
 		fmt.Println("Get ConfigMap")
 		/** Get ConfigMap<Data: Collector UUID Map, BinaryData: Collector Topics> Start */
-		configMap, err := clientSet.CoreV1().ConfigMaps(namespace).Get(context.TODO(), "cb-dragonfly-collector-configmap", metav1.GetOptions{})
+		configMap, err := clientSet.CoreV1().ConfigMaps(namespace).Get(context.TODO(), types.ConfigMapName, metav1.GetOptions{})
 		if err != nil {
 			if configMapFailCnt == 5 {
 				DeleteDeployment(clientSet, createOrder, collectorUUID, namespace)
@@ -163,7 +161,7 @@ func main() {
 				if _, ok := deadOrAliveCnt[delTopic]; !ok {
 					deadOrAliveCnt[delTopic] = 0
 				} else if ok {
-					if deadOrAliveCnt[delTopic] == 2 {
+					if deadOrAliveCnt[delTopic] == 3 {
 						getUrl := fmt.Sprintf("http://%s/dragonfly/topic/delete/%s", dfAddr, delTopic)
 						_, err = http.Get(getUrl)
 						if err != nil {

@@ -49,13 +49,18 @@ const (
 	CLOUDTWIN CLOUD_OS = "CLOUDTWIN"
 
 	//=========== ResourceType
-	NLB           RES_TYPE = "NETWORKLOADBALANCER"
 	VMIMAGE       RES_TYPE = "VMIMAGE"
 	VMSPEC        RES_TYPE = "VMSPEC"
 	VPCSUBNET     RES_TYPE = "VPC/SUBNET"
 	SECURITYGROUP RES_TYPE = "SECURITYGROUP"
 	VMKEYPAIR     RES_TYPE = "VMKEYPAIR"
+	DISK          RES_TYPE = "DISK"
 	VM            RES_TYPE = "VM"
+	MYIMAGE       RES_TYPE = "MYIMAGE"
+	NLB           RES_TYPE = "NETWORKLOADBALANCER"
+
+	//=========== PMKS: Provider-Managed K8S
+	CLUSTER       RES_TYPE = "CLUSTER"
 )
 
 type CALLLogger struct {

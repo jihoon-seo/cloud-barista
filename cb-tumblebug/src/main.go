@@ -15,6 +15,8 @@ limitations under the License.
 package main
 
 import (
+	"bufio"
+	"encoding/csv"
 	"flag"
 	"fmt"
 	"os"
@@ -24,6 +26,7 @@ import (
 
 	//_ "github.com/go-sql-driver/mysql"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/spf13/viper"
 
 	"github.com/cloud-barista/cb-tumblebug/src/core/common"
 	"github.com/cloud-barista/cb-tumblebug/src/core/mcir"
@@ -35,6 +38,58 @@ import (
 	"xorm.io/xorm"
 	"xorm.io/xorm/names"
 )
+
+// init for main
+func init() {
+	profile := "cloud_conf"
+	setConfig(profile)
+}
+
+// setConfig get cloud settings from a config file
+func setConfig(profile string) {
+	viper.AddConfigPath(".")
+	viper.AddConfigPath("./conf/")
+	viper.AddConfigPath("../conf/")
+	viper.SetConfigName(profile)
+	viper.SetConfigType("yaml")
+	err := viper.ReadInConfig()
+	if err != nil { // Handle errors reading the config file
+		panic(fmt.Errorf("fatal error config file: %w", err))
+	}
+	err = viper.Unmarshal(&common.RuntimeConf)
+	if err != nil {
+		panic(err)
+	}
+
+	// const mrttArrayXMax = 300
+	// const mrttArrayYMax = 300
+	// common.RuntimeLatancyMap = make([][]string, mrttArrayXMax)
+
+	// cloudlatencymap.csv
+	file, fileErr := os.Open("../assets/cloudlatencymap.csv")
+	defer file.Close()
+	if fileErr != nil {
+		common.CBLog.Error(fileErr)
+		panic(fileErr)
+	}
+	rdr := csv.NewReader(bufio.NewReader(file))
+	common.RuntimeLatancyMap, _ = rdr.ReadAll()
+
+	for i, v := range common.RuntimeLatancyMap {
+		if i == 0 {
+			continue
+		}
+		if v[0] == "" {
+			break
+		}
+		common.RuntimeLatancyMapIndex[v[0]] = i
+	}
+
+	//fmt.Printf("RuntimeLatancyMap: %v\n\n", common.RuntimeLatancyMap)
+
+	fmt.Printf("[RuntimeLatancyMapIndex]\n %v\n", common.RuntimeLatancyMapIndex)
+
+}
 
 // Main Body
 
@@ -141,6 +196,13 @@ func main() {
 		fmt.Println("Table image set successfully..")
 	}
 
+	err = common.ORM.Sync2(new(mcir.TbCustomImageInfo))
+	if err != nil {
+		fmt.Println(err.Error())
+	} else {
+		fmt.Println("Table customImage set successfully..")
+	}
+
 	//defer db.Close()
 
 	//Ticker for MCIS Orchestration Policy
@@ -175,6 +237,8 @@ func main() {
 		//fmt.Println("gRPC server started on " + grpcserver.Port)
 		wg.Done()
 	}()
+
+	// fmt.Println("RuntimeConf: ", common.RuntimeConf.Cloud)
 
 	wg.Wait()
 }

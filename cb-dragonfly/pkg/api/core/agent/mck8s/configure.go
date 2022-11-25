@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/cloud-barista/cb-dragonfly/pkg/api/core/agent/common"
@@ -61,7 +62,7 @@ func CreateTelegrafConfigConfigmap(info common.AgentInstallInfo, yamlData unstru
 	strConf = strings.ReplaceAll(strConf, "{{server_port}}", fmt.Sprintf("%d", serverPort))
 	strConf = strings.ReplaceAll(strConf, "{{mechanism}}", mechanism)
 
-	strConf = strings.ReplaceAll(strConf, "{{agent_collect_interval}}", fmt.Sprintf("%ds", config.GetInstance().Monitoring.AgentInterval))
+	strConf = strings.ReplaceAll(strConf, "{{agent_collect_interval}}", fmt.Sprintf("%ds", config.GetInstance().Monitoring.MCK8SAgentInterval))
 
 	var kafkaPort int
 	if config.GetInstance().GetMonConfig().DeployType == types.Helm {
@@ -236,7 +237,9 @@ func InstallAgent(info common.AgentInstallInfo) (int, error) {
 			_, gvr, err := kubeserialize.NewDecodingSerializer(unstructured.UnstructuredJSONScheme).Decode(ext.Raw, nil, &u)
 
 			// 전체 리소스 라벨 생성
-			u.SetLabels(agentLabel)
+			if !strings.EqualFold(u.GetKind(), "pod") {
+				u.SetLabels(agentLabel)
+			}
 
 			// 컨피그맵일 경우 데이터 설정 및 생성
 			if strings.EqualFold(u.GetKind(), "configmap") {
@@ -349,4 +352,32 @@ func UninstallAgent(info common.AgentInstallInfo) (int, error) {
 		return http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to add agent metadata to queue, error=%s", err))
 	}
 	return http.StatusOK, nil
+}
+
+func HandleDomain(privateDomain bool, method string, ipInfo string, domain ...string) (err error) {
+	if privateDomain {
+		var domainInfo string
+		for index, content := range domain {
+			if index == 0 {
+				domainInfo = content
+				continue
+			}
+			domainInfo += fmt.Sprintf(" %s", content)
+		}
+
+		var cmd string
+
+		if strings.EqualFold(method, types.CREATE) {
+			cmd = fmt.Sprintf("echo '%s %s' | sudo tee -a /etc/hosts", ipInfo, domainInfo)
+		}
+		if strings.EqualFold(method, types.DELETE) {
+			cmd = fmt.Sprintf("sudo cp /etc/hosts /etc/hosts2 && sudo sed -i 's/^%s.*%s$//g' /etc/hosts2 && sudo cat /etc/hosts2 | sudo tee /etc/hosts", ipInfo, domainInfo)
+		}
+
+		if _, err = exec.Command("sh", "-c", cmd).Output(); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

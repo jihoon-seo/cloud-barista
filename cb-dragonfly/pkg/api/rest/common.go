@@ -19,21 +19,25 @@ type AgentType struct {
 	NsId        string `json:"ns_id"`
 
 	// 쿠버네티스 모니터링
-	Mck8sId      string `json:"mck8s_id"`
-	APIServerURL string `json:"apiserver_url"`
-	ServerCA     string `json:"server_ca"`
-	ClientCA     string `json:"client_ca"`
-	ClientKey    string `json:"client_key"`
-	ClientToken  string `json:"client_token"`
+	Mck8sId       string  `json:"mck8s_id"`
+	APIServerURL  string  `json:"apiserver_url"`
+	ServerCA      string  `json:"server_ca"`
+	ClientCA      string  `json:"client_ca"`
+	ClientKey     string  `json:"client_key"`
+	ClientToken   string  `json:"client_token"`
+	PrivateDomain bool    `json:"private_domain"`
+	IP            *string `json:"ip"`
 
 	// MCIS 모니터링
-	McisId   string `json:"mcis_id"`
-	VmId     string `json:"vm_id"`
-	PublicIp string `json:"public_ip"`
-	UserName string `json:"user_name"`
-	SshKey   string `json:"ssh_key"`
-	CspType  string `json:"cspType"`
-	Port     string `json:"port"`
+	McisId      string `json:"mcis_id"`
+	VmId        string `json:"vm_id"`
+	PublicIp    string `json:"public_ip"`
+	UserName    string `json:"user_name"`
+	SshKey      string `json:"ssh_key"`
+	CspType     string `json:"cspType"`
+	Port        string `json:"port"`
+	AgentState  string `json:"agent_state"`
+	AgentHealth string `json:"agent_health"`
 }
 
 type VMOnDemandMetricTags struct {
@@ -79,11 +83,4 @@ type VMMonInfoType struct {
 	Tags   VMMonInfoTags     `json:"tags"`
 	Time   string            `json:"time"`
 	Values []VMMonInfoValues `json:"values"`
-}
-
-// JSONResult's data field will be overridden by the specific type
-type JSONResult struct {
-	//Code    int          `json:"code" `
-	//Message string       `json:"message"`
-	//Data    interface{}  `json:"data"`
 }

@@ -353,6 +353,33 @@
       "contributions": [
         "userTesting"
       ]
+    },
+    {
+      "login": "bconfiden2",
+      "name": "Sanghong Kim",
+      "avatar_url": "https://avatars.githubusercontent.com/u/58922834?v=4",
+      "profile": "https://github.com/bconfiden2",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "Rohit-R2000",
+      "name": "Rohit Rajput",
+      "avatar_url": "https://avatars.githubusercontent.com/u/83547290?v=4",
+      "profile": "https://github.com/Rohit-R2000",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "arshad-k7",
+      "name": "Arshad",
+      "avatar_url": "https://avatars.githubusercontent.com/u/49522121?v=4",
+      "profile": "https://github.com/arshad-k7",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "contributorsPerLine": 7,
@@ -360,5 +387,6 @@
   "projectOwner": "cloud-barista",
   "repoType": "github",
   "repoHost": "https://github.com",
-  "skipCi": true
+  "skipCi": true,
+  "commitConvention": "angular"
 }

@@ -169,8 +169,10 @@ func RunServer(port string) {
 
 	e.POST("/tumblebug/mcisRecommendVm", rest_mcis.RestRecommendVm)
 	e.POST("/tumblebug/mcisDynamicCheckRequest", rest_mcis.RestPostMcisDynamicCheckRequest)
+	e.POST("/tumblebug/systemMcis", rest_mcis.RestPostSystemMcis)
 
 	g.POST("/:nsId/mcisDynamic", rest_mcis.RestPostMcisDynamic)
+	g.POST("/:nsId/mcis/:mcisId/vmDynamic", rest_mcis.RestPostMcisVmDynamic)
 
 	//g.GET("/:nsId/mcis/:mcisId", rest_mcis.RestGetMcis, middleware.TimeoutWithConfig(middleware.TimeoutConfig{Timeout: 20 * time.Second}), middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(1)))
 	//g.GET("/:nsId/mcis", rest_mcis.RestGetAllMcis, middleware.TimeoutWithConfig(middleware.TimeoutConfig{Timeout: 20 * time.Second}), middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(1)))
@@ -182,15 +184,18 @@ func RunServer(port string) {
 		middleware.TimeoutConfig{Timeout: 60 * time.Second}),
 		middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(2)))
 
-	g.PUT("/:nsId/mcis/:mcisId", rest_mcis.RestPutMcis)
+	// g.PUT("/:nsId/mcis/:mcisId", rest_mcis.RestPutMcis)
 	g.DELETE("/:nsId/mcis/:mcisId", rest_mcis.RestDelMcis)
 	g.DELETE("/:nsId/mcis", rest_mcis.RestDelAllMcis)
 
 	g.POST("/:nsId/mcis/:mcisId/vm", rest_mcis.RestPostMcisVm)
-	g.POST("/:nsId/mcis/:mcisId/vmgroup", rest_mcis.RestPostMcisVmGroup)
 	g.GET("/:nsId/mcis/:mcisId/vm/:vmId", rest_mcis.RestGetMcisVm)
+	g.GET("/:nsId/mcis/:mcisId/subgroup", rest_mcis.RestGetMcisGroupIds)
+	g.GET("/:nsId/mcis/:mcisId/subgroup/:subgroupId", rest_mcis.RestGetMcisGroupVms)
+	g.POST("/:nsId/mcis/:mcisId/subgroup/:subgroupId", rest_mcis.RestPostMcisSubGroupScaleOut)
+
 	//g.GET("/:nsId/mcis/:mcisId/vm", rest_mcis.RestGetAllMcisVm)
-	//g.PUT("/:nsId/mcis/:mcisId/vm/:vmId", rest_mcis.RestPutMcisVm)
+	// g.PUT("/:nsId/mcis/:mcisId/vm/:vmId", rest_mcis.RestPutMcisVm)
 	g.DELETE("/:nsId/mcis/:mcisId/vm/:vmId", rest_mcis.RestDelMcisVm)
 	//g.DELETE("/:nsId/mcis/:mcisId/vm", rest_mcis.RestDelAllMcisVm)
 
@@ -204,6 +209,7 @@ func RunServer(port string) {
 	g.POST("/:nsId/installBenchmarkAgent/mcis/:mcisId", rest_mcis.RestPostInstallBenchmarkAgentToMcis)
 	g.POST("/:nsId/benchmark/mcis/:mcisId", rest_mcis.RestGetBenchmark)
 	g.POST("/:nsId/benchmarkAll/mcis/:mcisId", rest_mcis.RestGetAllBenchmark)
+	g.GET("/:nsId/benchmarkLatency/mcis/:mcisId", rest_mcis.RestGetBenchmarkLatency)
 
 	//MCIS AUTO Policy
 	g.POST("/:nsId/policy/mcis/:mcisId", rest_mcis.RestPostMcisPolicy)
@@ -220,13 +226,46 @@ func RunServer(port string) {
 	g.POST("/:nsId/network/mcis/:mcisId", rest_mcis.RestPostConfigureCloudAdaptiveNetworkToMcis)
 	g.PUT("/:nsId/network/mcis/:mcisId", rest_mcis.RestPutInjectCloudInformationForCloudAdaptiveNetwork)
 
+	// Network Load Balancer
+	g.POST("/:nsId/mcis/:mcisId/mcSwNlb", rest_mcis.RestPostMcNLB)
+	g.POST("/:nsId/mcis/:mcisId/nlb", rest_mcis.RestPostNLB)
+	g.GET("/:nsId/mcis/:mcisId/nlb/:resourceId", rest_mcis.RestGetNLB)
+	g.GET("/:nsId/mcis/:mcisId/nlb", rest_mcis.RestGetAllNLB)
+	// g.PUT("/:nsId/mcis/:mcisId/nlb/:resourceId", rest_mcis.RestPutNLB)
+	g.DELETE("/:nsId/mcis/:mcisId/nlb/:resourceId", rest_mcis.RestDelNLB)
+	g.DELETE("/:nsId/mcis/:mcisId/nlb", rest_mcis.RestDelAllNLB)
+	g.GET("/:nsId/mcis/:mcisId/nlb/:resourceId/healthz", rest_mcis.RestGetNLBHealth)
+
+	// VM snapshot -> creates one customImage and 'n' dataDisks
+	g.POST("/:nsId/mcis/:mcisId/vm/:vmId/snapshot", rest_mcis.RestPostMcisVmSnapshot)
+
+	// These REST APIs are for dev/test only
+	g.POST("/:nsId/mcis/:mcisId/nlb/:resourceId/vm", rest_mcis.RestAddNLBVMs)
+	g.DELETE("/:nsId/mcis/:mcisId/nlb/:resourceId/vm", rest_mcis.RestRemoveNLBVMs)
+
 	//MCIR Management
+	g.POST("/:nsId/resources/dataDisk", rest_mcir.RestPostDataDisk)
+	g.GET("/:nsId/resources/dataDisk/:resourceId", rest_mcir.RestGetResource)
+	g.GET("/:nsId/resources/dataDisk", rest_mcir.RestGetAllResources)
+	g.PUT("/:nsId/resources/dataDisk/:resourceId", rest_mcir.RestPutDataDisk)
+	g.DELETE("/:nsId/resources/dataDisk/:resourceId", rest_mcir.RestDelResource)
+	g.DELETE("/:nsId/resources/dataDisk", rest_mcir.RestDelAllResources)
+	g.GET("/:nsId/mcis/:mcisId/vm/:vmId/dataDisk", rest_mcir.RestGetVmDataDisk)
+	g.PUT("/:nsId/mcis/:mcisId/vm/:vmId/dataDisk", rest_mcir.RestPutVmDataDisk)
+
 	g.POST("/:nsId/resources/image", rest_mcir.RestPostImage)
 	g.GET("/:nsId/resources/image/:resourceId", rest_mcir.RestGetResource)
 	g.GET("/:nsId/resources/image", rest_mcir.RestGetAllResources)
 	g.PUT("/:nsId/resources/image/:resourceId", rest_mcir.RestPutImage)
 	g.DELETE("/:nsId/resources/image/:resourceId", rest_mcir.RestDelResource)
 	g.DELETE("/:nsId/resources/image", rest_mcir.RestDelAllResources)
+
+	g.POST("/:nsId/resources/customImage", rest_mcir.RestPostCustomImage)
+	g.GET("/:nsId/resources/customImage/:resourceId", rest_mcir.RestGetResource)
+	g.GET("/:nsId/resources/customImage", rest_mcir.RestGetAllResources)
+	// g.PUT("/:nsId/resources/customImage/:resourceId", rest_mcir.RestPutCustomImage)
+	g.DELETE("/:nsId/resources/customImage/:resourceId", rest_mcir.RestDelResource)
+	g.DELETE("/:nsId/resources/customImage", rest_mcir.RestDelAllResources)
 
 	g.POST("/:nsId/resources/sshKey", rest_mcir.RestPostSshKey)
 	g.GET("/:nsId/resources/sshKey/:resourceId", rest_mcir.RestGetResource)

@@ -597,7 +597,7 @@ service MCIS {
 	rpc DeleteAllMcis (TbMcisAllQryRequest) returns (MessageResponse) {}
 
 	rpc CreateMcisVM (TbVmCreateRequest) returns (TbVmInfoResponse) {}
-	rpc CreateMcisVMGroup (TbVmGroupCreateRequest) returns (TbMcisInfoResponse) {}
+	rpc CreateMcisSubGroup (TbSubGroupCreateRequest) returns (TbMcisInfoResponse) {}
 	rpc ControlMcisVM (TbVmActionRequest) returns (MessageResponse) {}
 	rpc GetMcisVMStatus (TbVmQryRequest) returns (TbVmStatusInfoesponse) {}
 	rpc GetMcisVMInfo (TbVmQryRequest) returns (TbVmInfoResponse) {}
@@ -655,7 +655,7 @@ message TbMcisInfo {
 message TbVmInfo {
 	string id = 1 [json_name="id", (gogoproto.jsontag) = "id", (gogoproto.moretags) = "yaml:\"id\""];
 	string name = 2 [json_name="name", (gogoproto.jsontag) = "name", (gogoproto.moretags) = "yaml:\"name\""];
-	string vm_group_id = 3 [json_name="vmGroupId", (gogoproto.jsontag) = "vmGroupId", (gogoproto.moretags) = "yaml:\"vmGroupId\""];
+	string vm_group_id = 3 [json_name="SubGroupId", (gogoproto.jsontag) = "SubGroupId", (gogoproto.moretags) = "yaml:\"SubGroupId\""];
 	GeoLocation location = 4 [json_name="location", (gogoproto.jsontag) = "location", (gogoproto.moretags) = "yaml:\"location\""];
 	string status = 5 [json_name="status", (gogoproto.jsontag) = "status", (gogoproto.moretags) = "yaml:\"status\""];
 	string target_status = 6 [json_name="targetStatus", (gogoproto.jsontag) = "targetStatus", (gogoproto.moretags) = "yaml:\"targetStatus\""];
@@ -671,8 +671,8 @@ message TbVmInfo {
 	string public_dns = 16 [json_name="publicDNS", (gogoproto.jsontag) = "publicDNS", (gogoproto.moretags) = "yaml:\"publicDNS\""];
 	string private_ip = 17 [json_name="privateIP", (gogoproto.jsontag) = "privateIP", (gogoproto.moretags) = "yaml:\"privateIP\""];
 	string private_dns = 18 [json_name="privateDNS", (gogoproto.jsontag) = "privateDNS", (gogoproto.moretags) = "yaml:\"privateDNS\""];
-	string vm_boot_disk = 19 [json_name="vmBootDisk", (gogoproto.jsontag) = "vmBootDisk", (gogoproto.moretags) = "yaml:\"vmBootDisk\""];
-	string vm_block_disk = 20 [json_name="vmBlockDisk", (gogoproto.jsontag) = "vmBlockDisk", (gogoproto.moretags) = "yaml:\"vmBlockDisk\""];
+	
+
 	string connection_name = 21 [json_name="connectionName", (gogoproto.jsontag) = "connectionName", (gogoproto.moretags) = "yaml:\"connectionName\""];
 	string spec_id = 22 [json_name="specId", (gogoproto.jsontag) = "specId", (gogoproto.moretags) = "yaml:\"specId\""];
 	string image_id = 23 [json_name="imageId", (gogoproto.jsontag) = "imageId", (gogoproto.moretags) = "yaml:\"imageId\""];
@@ -726,8 +726,8 @@ message SpiderVMInfo {
 	string public_dns = 20 [json_name="PublicDNS", (gogoproto.jsontag) = "PublicDNS", (gogoproto.moretags) = "yaml:\"PublicDNS\""];
 	string private_ip = 21 [json_name="PrivateIP", (gogoproto.jsontag) = "PrivateIP", (gogoproto.moretags) = "yaml:\"PrivateIP\""];
 	string private_dns = 22 [json_name="PrivateDNS", (gogoproto.jsontag) = "PrivateDNS", (gogoproto.moretags) = "yaml:\"PrivateDNS\""];
-	string vm_boot_disk = 23 [json_name="VMBootDisk", (gogoproto.jsontag) = "VMBootDisk", (gogoproto.moretags) = "yaml:\"VMBootDisk\""];
-	string vm_block_disk = 24 [json_name="VMBlockDisk", (gogoproto.jsontag) = "VMBlockDisk", (gogoproto.moretags) = "yaml:\"VMBlockDisk\""];
+	
+	
 	string ssh_access_point = 25 [json_name="SSHAccessPoint", (gogoproto.jsontag) = "SSHAccessPoint", (gogoproto.moretags) = "yaml:\"SSHAccessPoint\""];
 	repeated KeyValue key_value_list = 26 [json_name="KeyValueList", (gogoproto.jsontag) = "KeyValueList", (gogoproto.moretags) = "yaml:\"KeyValueList\""];
 }
@@ -758,7 +758,7 @@ message TbMcisDynamicReq {
 
 message TbVmReq {
 	string name = 1 [json_name="name", (gogoproto.jsontag) = "name", (gogoproto.moretags) = "yaml:\"name\""];
-	string vm_group_size = 2 [json_name="vmGroupSize", (gogoproto.jsontag) = "vmGroupSize", (gogoproto.moretags) = "yaml:\"vmGroupSize\""];
+	string vm_group_size = 2 [json_name="SubGroupSize", (gogoproto.jsontag) = "SubGroupSize", (gogoproto.moretags) = "yaml:\"SubGroupSize\""];
 	string label = 3 [json_name="label", (gogoproto.jsontag) = "label", (gogoproto.moretags) = "yaml:\"label\""];
 	string description = 4 [json_name="description", (gogoproto.jsontag) = "description", (gogoproto.moretags) = "yaml:\"description\""];
 	string connection_name = 5 [json_name="connectionName", (gogoproto.jsontag) = "connectionName", (gogoproto.moretags) = "yaml:\"connectionName\""];
@@ -774,7 +774,7 @@ message TbVmReq {
 
 message TbVmDynamicReq {
 	string name = 1 [json_name="name", (gogoproto.jsontag) = "name", (gogoproto.moretags) = "yaml:\"name\""];
-	uint32 vm_group_size = 2 [json_name="vmGroupSize", (gogoproto.jsontag) = "vmGroupSize", (gogoproto.moretags) = "yaml:\"vmGroupSize\""];
+	uint32 vm_group_size = 2 [json_name="SubGroupSize", (gogoproto.jsontag) = "SubGroupSize", (gogoproto.moretags) = "yaml:\"SubGroupSize\""];
 	string label = 3 [json_name="label", (gogoproto.jsontag) = "label", (gogoproto.moretags) = "yaml:\"label\""];
 	string description = 4 [json_name="description", (gogoproto.jsontag) = "description", (gogoproto.moretags) = "yaml:\"description\""];
 	string common_spec = 5 [json_name="commonSpec", (gogoproto.jsontag) = "commonSpec", (gogoproto.moretags) = "yaml:\"commonSpec\""];
@@ -866,7 +866,7 @@ message TbVmCreateRequest {
 	TbVmInfo item = 3 [json_name="mcisvm", (gogoproto.jsontag) = "mcisvm", (gogoproto.moretags) = "yaml:\"mcisvm\""];
 }
 
-message TbVmGroupCreateRequest {
+message TbSubGroupCreateRequest {
 	string ns_id = 1 [json_name="nsId", (gogoproto.jsontag) = "nsId", (gogoproto.moretags) = "yaml:\"nsId\""];
 	string mcis_id = 2 [json_name="mcisId", (gogoproto.jsontag) = "mcisId", (gogoproto.moretags) = "yaml:\"mcisId\""];
 	TbVmReq item = 3 [json_name="groupvm", (gogoproto.jsontag) = "groupvm", (gogoproto.moretags) = "yaml:\"groupvm\""];

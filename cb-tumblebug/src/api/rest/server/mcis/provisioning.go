@@ -88,6 +88,37 @@ func RestPostRegisterCSPNativeVM(c echo.Context) error {
 	return c.JSON(http.StatusCreated, result)
 }
 
+// RestPostSystemMcis godoc
+// @Summary Create System MCIS Dynamically for Special Purpose in NS:system-purpose-common-ns
+// @Description Create System MCIS Dynamically for Special Purpose
+// @Tags [Infra service] MCIS Provisioning management
+// @Accept  json
+// @Produce  json
+// @Param option query string false "Option for the purpose of system MCIS" Enums(probe)
+// @Success 200 {object} TbMcisInfo
+// @Failure 404 {object} common.SimpleMsg
+// @Failure 500 {object} common.SimpleMsg
+// @Router /systemMcis [post]
+func RestPostSystemMcis(c echo.Context) error {
+
+	option := c.QueryParam("option")
+
+	req := &mcis.TbMcisDynamicReq{}
+	if err := c.Bind(req); err != nil {
+		return err
+	}
+
+	result, err := mcis.CreateSystemMcisDynamic(option)
+	if err != nil {
+		mapA := map[string]string{"message": err.Error()}
+		return c.JSON(http.StatusInternalServerError, &mapA)
+	}
+
+	common.PrintJsonPretty(*result)
+
+	return c.JSON(http.StatusCreated, result)
+}
+
 // RestPostMcisDynamic godoc
 // @Summary Create MCIS Dynamically
 // @Description Create MCIS Dynamically from common spec and image
@@ -110,6 +141,40 @@ func RestPostMcisDynamic(c echo.Context) error {
 	}
 
 	result, err := mcis.CreateMcisDynamic(nsId, req)
+	if err != nil {
+		mapA := map[string]string{"message": err.Error()}
+		return c.JSON(http.StatusInternalServerError, &mapA)
+	}
+
+	common.PrintJsonPretty(*result)
+
+	return c.JSON(http.StatusCreated, result)
+}
+
+// RestPostMcisVmDynamic godoc
+// @Summary Create VM Dynamically and add it to MCIS
+// @Description Create VM Dynamically and add it to MCIS
+// @Tags [Infra service] MCIS Provisioning management
+// @Accept  json
+// @Produce  json
+// @Param nsId path string true "Namespace ID" default(ns01)
+// @Param mcisId path string true "MCIS ID" default(mcis01)
+// @Param vmReq body TbVmDynamicReq true "Details for Vm dynamic request"
+// @Success 200 {object} TbMcisInfo
+// @Failure 404 {object} common.SimpleMsg
+// @Failure 500 {object} common.SimpleMsg
+// @Router /ns/{nsId}/mcis/{mcisId}/vmDynamic [post]
+func RestPostMcisVmDynamic(c echo.Context) error {
+
+	nsId := c.Param("nsId")
+	mcisId := c.Param("mcisId")
+
+	req := &mcis.TbVmDynamicReq{}
+	if err := c.Bind(req); err != nil {
+		return err
+	}
+
+	result, err := mcis.CreateMcisVmDynamic(nsId, mcisId, req)
 	if err != nil {
 		mapA := map[string]string{"message": err.Error()}
 		return c.JSON(http.StatusInternalServerError, &mapA)
@@ -150,53 +215,19 @@ func RestPostMcisDynamicCheckRequest(c echo.Context) error {
 }
 
 // RestPostMcisVm godoc
-// @Summary Create VM in specified MCIS
-// @Description Create VM in specified MCIS
+// @Summary Create and add homogeneous VMs(subGroup) to a specified MCIS (Set subGroupSize for multiple VMs)
+// @Description Create and add homogeneous VMs(subGroup) to a specified MCIS (Set subGroupSize for multiple VMs)
 // @Tags [Infra service] MCIS Provisioning management
 // @Accept  json
 // @Produce  json
 // @Param nsId path string true "Namespace ID" default(ns01)
 // @Param mcisId path string true "MCIS ID" default(mcis01)
-// @Param vmReq body mcis.TbVmReq true "Details for an VM object"
-// @Success 200 {object} mcis.TbVmInfo
+// @Param vmReq body mcis.TbVmReq true "Details for VMs(subGroup)"
+// @Success 200 {object} mcis.TbMcisInfo
 // @Failure 404 {object} common.SimpleMsg
 // @Failure 500 {object} common.SimpleMsg
 // @Router /ns/{nsId}/mcis/{mcisId}/vm [post]
 func RestPostMcisVm(c echo.Context) error {
-
-	nsId := c.Param("nsId")
-	mcisId := c.Param("mcisId")
-
-	vmInfoData := &mcis.TbVmInfo{}
-	if err := c.Bind(vmInfoData); err != nil {
-		return err
-	}
-	common.PrintJsonPretty(*vmInfoData)
-
-	result, err := mcis.CorePostMcisVm(nsId, mcisId, vmInfoData)
-	if err != nil {
-		mapA := map[string]string{"message": err.Error()}
-		return c.JSON(http.StatusInternalServerError, &mapA)
-	}
-	common.PrintJsonPretty(*result)
-
-	return c.JSON(http.StatusCreated, result)
-}
-
-// RestPostMcisVmGroup godoc
-// @Summary Create multiple VMs by VM group in specified MCIS
-// @Description Create multiple VMs by VM group in specified MCIS
-// @Tags [Infra service] MCIS Provisioning management
-// @Accept  json
-// @Produce  json
-// @Param nsId path string true "Namespace ID" default(ns01)
-// @Param mcisId path string true "MCIS ID" default(mcis01)
-// @Param vmReq body mcis.TbVmReq true "Details for VM Group"
-// @Success 200 {object} mcis.TbMcisInfo
-// @Failure 404 {object} common.SimpleMsg
-// @Failure 500 {object} common.SimpleMsg
-// @Router /ns/{nsId}/mcis/{mcisId}/vmgroup [post]
-func RestPostMcisVmGroup(c echo.Context) error {
 
 	nsId := c.Param("nsId")
 	mcisId := c.Param("mcisId")
@@ -207,7 +238,42 @@ func RestPostMcisVmGroup(c echo.Context) error {
 	}
 	common.PrintJsonPretty(*vmInfoData)
 
-	result, err := mcis.CreateMcisGroupVm(nsId, mcisId, vmInfoData)
+	result, err := mcis.CreateMcisGroupVm(nsId, mcisId, vmInfoData, true)
+	if err != nil {
+		mapA := map[string]string{"message": err.Error()}
+		return c.JSON(http.StatusInternalServerError, &mapA)
+	}
+	common.PrintJsonPretty(*result)
+
+	return c.JSON(http.StatusCreated, result)
+}
+
+// RestPostMcisSubGroupScaleOut godoc
+// @Summary ScaleOut subGroup in specified MCIS
+// @Description ScaleOut subGroup in specified MCIS
+// @Tags [Infra service] MCIS Provisioning management
+// @Accept  json
+// @Produce  json
+// @Param nsId path string true "Namespace ID" default(ns01)
+// @Param mcisId path string true "MCIS ID" default(mcis01)
+// @Param subgroupId path string true "subGroup ID" default(g1)
+// @Param vmReq body mcis.TbScaleOutSubGroupReq true "subGroup scaleOut request"
+// @Success 200 {object} mcis.TbMcisInfo
+// @Failure 404 {object} common.SimpleMsg
+// @Failure 500 {object} common.SimpleMsg
+// @Router /ns/{nsId}/mcis/{mcisId}/subgroup/{subgroupId} [post]
+func RestPostMcisSubGroupScaleOut(c echo.Context) error {
+
+	nsId := c.Param("nsId")
+	mcisId := c.Param("mcisId")
+	subgroupId := c.Param("subgroupId")
+
+	scaleOutReq := &mcis.TbScaleOutSubGroupReq{}
+	if err := c.Bind(scaleOutReq); err != nil {
+		return err
+	}
+
+	result, err := mcis.ScaleOutMcisSubGroup(nsId, mcisId, subgroupId, scaleOutReq.NumVMsToAdd)
 	if err != nil {
 		mapA := map[string]string{"message": err.Error()}
 		return c.JSON(http.StatusInternalServerError, &mapA)

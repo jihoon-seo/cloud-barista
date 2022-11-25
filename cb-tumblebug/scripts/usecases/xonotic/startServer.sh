@@ -6,16 +6,16 @@ echo "[Start Xonotic FPS Game Server]"
 
 SECONDS=0
 
-serverName=${1:-Xonotic-0.8.2-by-Cloud-Barista}
+serverName=${1:-Xonotic-0.8.5-by-Cloud-Barista}
 serverPort=${2:-26000}
 numBot=${3:-2}
 numMaxUser=32
 
 echo "Installing Xonotic to instance..."
-FILE="xonotic-0.8.2.zip"
+FILE="xonotic-0.8.5.zip"
 
 #InstallFilePath="https://.../$FILE"
-InstallFilePath="https://z.xnz.me/xonotic/builds/$FILE"
+InstallFilePath="https://github.com/garymoon/xonotic/releases/download/xonotic-v0.8.5/$FILE"
 
 if test -f "$FILE"; then
         echo "$FILE exists."
@@ -32,8 +32,8 @@ else
 fi
 
 appendConfig="port $serverPort\nhostname \"$serverName\"\nmaxplayers $numMaxUser\nbot_number $numBot"
-cp ~/Xonotic/server/server.cfg ~/Xonotic/data/
-echo -e "${appendConfig}" >>~/Xonotic/data/server.cfg
+sudo cp ~/Xonotic/server/server.cfg ~/.xonotic/data
+sudo echo -e "${appendConfig}" >> ~/.xonotic/data/server.cfg
 
 echo "Launching Xonotic dedicated server"
 

@@ -100,20 +100,20 @@ func AddNode(namespace string, clusterName string, req *app.NodeReq) (*model.Nod
 	idx := cluster.NextNodeIndex(app.WORKER)
 	vms := []tumblebug.VM{}
 	for _, worker := range req.Worker {
-		mcir := NewMCIR(namespace, app.WORKER, worker)
+		mcir := NewMCIR(namespace, app.WORKER, *worker)
 		reason, msg := mcir.CreateIfNotExist()
 		if reason != "" {
 			return nil, errors.New(msg)
 		} else {
 			for i := 0; i < mcir.vmCount; i++ {
 				name := lang.GenerateNewNodeName(string(app.WORKER), idx)
-				vm := mcir.NewVM(namespace, name, mcisName)
+				vm := mcir.NewVM(namespace, name, mcisName, "", worker.RootDisk.Type, worker.RootDisk.Size)
 				if err := vm.POST(); err != nil {
 					cleanUpNodes(*provisioner)
 					return nil, err
 				}
 				vms = append(vms, vm)
-				provisioner.AppendWorkerNodeMachine(name, mcir.csp, mcir.region, mcir.zone, mcir.credential)
+				provisioner.AppendWorkerNodeMachine(vm.Name, mcir.csp, mcir.region, mcir.zone, mcir.credential)
 				idx = idx + 1
 			}
 		}

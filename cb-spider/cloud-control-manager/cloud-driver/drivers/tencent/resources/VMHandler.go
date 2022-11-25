@@ -1,6 +1,5 @@
 // Proof of Concepts for the Cloud-Barista Multi-Cloud Project.
-//      * Cloud-Barista: https://github.com/cloud-barista
-//
+//   - Cloud-Barista: https://github.com/cloud-barista
 //
 // by CB-Spider Team, 2019.03.
 package resources
@@ -20,10 +19,12 @@ import (
 
 	cblog "github.com/cloud-barista/cb-log"
 	call "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/call-log"
+	cdcom "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/common"
 	idrv "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/interfaces"
 	irs "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/interfaces/resources"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/sirupsen/logrus"
+	tencentcbs "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/cbs/v20170312"
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
 	cvm "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/cvm/v20170312"
 	//lighthouse "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/lighthouse/v20200324"
@@ -37,8 +38,9 @@ func init() {
 }
 
 type TencentVMHandler struct {
-	Region idrv.RegionInfo
-	Client *cvm.Client
+	Region     idrv.RegionInfo
+	Client     *cvm.Client
+	DiskClient *tencentcbs.Client
 }
 
 //type TencentCbsHandler struct {
@@ -86,13 +88,41 @@ func (vmHandler *TencentVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo,
 	//=================================================
 	// 동일 이름 생성 방지 추가(cb-spider 요청 필수 기능)
 	//=================================================
-	vmExist, errExist := vmHandler.vmExist(vmReqInfo.IId.NameId)
-	if errExist != nil {
-		cblogger.Error(errExist)
-		return irs.VMInfo{}, errExist
+	//vmExist, errExist := vmHandler.vmExist(vmReqInfo.IId.NameId)
+	//cblogger.Error("vmExist ::: ", vmExist)
+	//cblogger.Error("errExist :::", errExist)
+	//if errExist != nil {
+	//	cblogger.Error(errExist)
+	//	return irs.VMInfo{}, errExist
+	//}
+	//if vmExist {
+	//	return irs.VMInfo{}, errors.New("A VM with the name " + vmReqInfo.IId.NameId + " already exists.")
+	//}
+
+	cblogger.Error("imageInfo begin")
+	// Image의 크기 -> rootdisk size, datadisk attach 확인 및 설정
+	imageTypes := []string{"PUBLIC_IMAGE", "SHARED_IMAGE", "PRIVATE_IMAGE"}
+	imageInfo, err := DescribeImagesByID(vmHandler.Client, vmReqInfo.ImageIID, imageTypes)
+	if err != nil {
+		cblogger.Error(err)
+		return irs.VMInfo{}, err
 	}
-	if vmExist {
-		return irs.VMInfo{}, errors.New("A VM with the name " + vmReqInfo.IId.NameId + " already exists.")
+
+	isWindow := false
+	cblogger.Info("OsName,", *imageInfo.OsName)     //"OsName": "Windows Server 2012 R2 DataCenter 64bitEN",
+	cblogger.Info("Platform,", *imageInfo.Platform) //"Platform": "Windows", "Ubuntu",
+
+	platform := GetOsType(imageInfo)
+	if platform == "Windows" {
+		err := cdcom.ValidateWindowsPassword(vmReqInfo.VMUserPasswd)
+		if err != nil {
+			return irs.VMInfo{}, err
+		}
+
+		isWindow = true
+		vmReqInfo.KeyPairIID = irs.IID{}
+		vmReqInfo.VMUserId = "administrator" // window은 administrator로 set
+		cblogger.Error("Window 이므로 keyPair는 사용하지 않고 admin, pass만 사용", vmReqInfo.VMUserId, vmReqInfo.VMUserPasswd, vmReqInfo.KeyPairIID)
 	}
 
 	/* 2021-10-26 이슈 #480에 의해 제거
@@ -143,8 +173,17 @@ func (vmHandler *TencentVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo,
 	}
 
 	request.InstanceName = common.StringPtr(vmReqInfo.IId.NameId)
-	request.LoginSettings = &cvm.LoginSettings{
-		KeyIds: common.StringPtrs([]string{vmReqInfo.KeyPairIID.SystemId}),
+
+	// windows의 경우 keyPair set 하면 오류. password setting 되어있는지 확인
+	if isWindow {
+		//user := vmReqInfo.VMUserId // administrator
+		request.LoginSettings = &cvm.LoginSettings{
+			Password: &vmReqInfo.VMUserPasswd,
+		}
+	} else {
+		request.LoginSettings = &cvm.LoginSettings{
+			KeyIds: common.StringPtrs([]string{vmReqInfo.KeyPairIID.SystemId}),
+		}
 	}
 
 	//=============================
@@ -265,16 +304,7 @@ func (vmHandler *TencentVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo,
 				return irs.VMInfo{}, err
 			}
 
-			imageRequest := cvm.NewDescribeImagesRequest()
-
-			imageRequest.ImageIds = common.StringPtrs([]string{vmReqInfo.ImageIID.SystemId})
-
-			response, err := vmHandler.Client.DescribeImages(imageRequest)
-			if err != nil {
-				cblogger.Error(err)
-				return irs.VMInfo{}, err
-			}
-			imageSize := *response.Response.ImageSet[0].ImageSize
+			imageSize := *imageInfo.ImageSize
 			fmt.Println("image : ", imageSize)
 
 			if rootDiskSize < imageSize {
@@ -290,6 +320,20 @@ func (vmHandler *TencentVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo,
 		}
 
 	}
+
+	// image 정보에 포함된 data disk setting
+	snapshotSet := imageInfo.SnapshotSet
+	dataDiskList := []*cvm.DataDisk{}
+	for _, snapshot := range snapshotSet {
+		dataDisk := cvm.DataDisk{}
+		if *snapshot.DiskUsage == "DATA_DISK" {
+			dataDisk.SnapshotId = snapshot.SnapshotId
+			dataDisk.DiskSize = snapshot.DiskSize
+			dataDiskList = append(dataDiskList, &dataDisk)
+			cblogger.Info("Image에 DataDisk 포함 되어 있음. ")
+		}
+	}
+	request.DataDisks = dataDiskList
 
 	//=============================
 	// UserData생성 처리(File기반)
@@ -340,9 +384,26 @@ func (vmHandler *TencentVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo,
 	}
 	cblogger.Info("==>생성된 VM[%s]의 현재 상태[%s]", newVmIID, curStatus)
 
+	DiskHandler := TencentDiskHandler{
+		Region: vmHandler.Region,
+		Client: vmHandler.DiskClient,
+	}
+
+	for _, disk := range vmReqInfo.DataDiskIIDs {
+		_, attachErr := AttachDisk(DiskHandler.Client, irs.IID{SystemId: disk.SystemId}, irs.IID{SystemId: newVmIID.SystemId})
+		if attachErr != nil {
+			return irs.VMInfo{}, attachErr
+		}
+
+		_, statusErr := WaitForDone(DiskHandler.Client, irs.IID{SystemId: disk.SystemId}, "ATTACHED")
+		if statusErr != nil {
+			return irs.VMInfo{}, statusErr
+		}
+	}
+
 	vmInfo, errVmInfo := vmHandler.GetVM(newVmIID)
 	vmInfo.IId.NameId = vmReqInfo.IId.NameId
-	if vmInfo.KeyPairIId.SystemId == "" {
+	if isWindow == false && vmInfo.KeyPairIId.SystemId == "" {
 		vmInfo.KeyPairIId.SystemId = vmReqInfo.KeyPairIID.SystemId // keypairIID가 없으면 채워 넣음, VM 생성 직후에는 안 들어올 수 있음
 	}
 	cblogger.Debug(vmInfo)
@@ -596,7 +657,18 @@ func (vmHandler *TencentVMHandler) ExtractDescribeInstances(curVm *cvm.Instance)
 	}
 
 	if !reflect.ValueOf(curVm.ImageId).IsNil() {
-		vmInfo.ImageIId = irs.IID{SystemId: *curVm.ImageId}
+		imageIID := irs.IID{SystemId: *curVm.ImageId}
+		vmInfo.ImageIId = imageIID
+		imageInfo, err := DescribeImagesByID(vmHandler.Client, imageIID, nil) // imageTypes := []string{"PUBLIC_IMAGE", "SHARED_IMAGE","PRIVATE_IMAGE"}
+		if err != nil {
+			cblogger.Error(err)
+		}
+
+		if *imageInfo.ImageType == "PRIVATE_IMAGE" {
+			vmInfo.ImageType = irs.MyImage
+		} else {
+			vmInfo.ImageType = irs.PublicImage // "PUBLIC_IMAGE", "SHARED_IMAGE"
+		}
 	}
 
 	// vmInfo.StartTime = *curVm.CreatedTime
@@ -679,8 +751,12 @@ func (vmHandler *TencentVMHandler) ExtractDescribeInstances(curVm *cvm.Instance)
 	//데이터 디스크 정보
 	if !reflect.ValueOf(curVm.DataDisks).IsNil() {
 		if len(curVm.DataDisks) > 0 {
-			if !reflect.ValueOf(curVm.DataDisks[0].DiskId).IsNil() {
-				vmInfo.VMBlockDisk = *curVm.DataDisks[0].DiskId
+			// if !reflect.ValueOf(curVm.DataDisks[0].DiskId).IsNil() {
+			// 	vmInfo.VMBlockDisk = *curVm.DataDisks[0].DiskId
+			// }
+			for _, dataDisk := range curVm.DataDisks {
+				dataDiskIID := irs.IID{SystemId: *dataDisk.DiskId}
+				vmInfo.DataDiskIIDs = append(vmInfo.DataDiskIIDs, dataDiskIID)
 			}
 		}
 	}
@@ -846,7 +922,6 @@ func (vmHandler *TencentVMHandler) ListVMStatus() ([]*irs.VMStatusInfo, error) {
 	return vmStatusList, nil
 }
 
-//
 // tencent life cycle
 // https://intl.cloud.tencent.com/document/product/213/4856?lang=en&pg=
 func ConvertVMStatusString(vmStatus string) (irs.VMStatus, error) {
@@ -924,7 +999,7 @@ func (vmHandler *TencentVMHandler) WaitForRun(vmIID irs.IID) (irs.VMStatus, erro
 	return irs.VMStatus(waitStatus), nil
 }
 
-//VM 이름으로 중복 생성을 막아야 해서 VM존재 여부를 체크함.
+// VM 이름으로 중복 생성을 막아야 해서 VM존재 여부를 체크함.
 func (vmHandler *TencentVMHandler) vmExist(vmName string) (bool, error) {
 	cblogger.Infof("VM조회(Name기반) : %s", vmName)
 	request := cvm.NewDescribeInstancesRequest()

@@ -23,6 +23,61 @@ import (
 	cbstore_utils "github.com/cloud-barista/cb-store/utils"
 )
 
+// RuntimeLatancyMap is global variable for LatancyMap
+var RuntimeLatancyMap = [][]string{}
+
+// RuntimeLatancyMapIndex is global variable for LatancyMap (index)
+var RuntimeLatancyMapIndex = make(map[string]int)
+
+// RuntimeConf is global variable for cloud config
+var RuntimeConf = RuntimeConfig{}
+
+// RuntimeConfig is structure for global variable for cloud config
+type RuntimeConfig struct {
+	Cloud Cloud `yaml:"cloud"`
+	Nlbsw Nlbsw `yaml:"nlbsw"`
+}
+
+// Cloud is structure for cloud settings per CSP
+type Cloud struct {
+	Common    CloudSetting `yaml:"common"`
+	Aws       CloudSetting `yaml:"aws"`
+	Azure     CloudSetting `yaml:"azure"`
+	Gcp       CloudSetting `yaml:"gcp"`
+	Alibaba   CloudSetting `yaml:"alibaba"`
+	Tencent   CloudSetting `yaml:"tencent"`
+	Ibm       CloudSetting `yaml:"ibm"`
+	Openstack CloudSetting `yaml:"openstack"`
+	Cloudit   CloudSetting `yaml:"cloudit"`
+}
+
+// CloudSetting is structure for cloud settings per CSP in details
+type CloudSetting struct {
+	Enable string     `yaml:"enable"`
+	Nlb    NlbSetting `yaml:"nlb"`
+}
+
+// NlbSetting is structure for NLB setting
+type NlbSetting struct {
+	Enable    string `yaml:"enable"`
+	Interval  string `yaml:"interval"`
+	Timeout   string `yaml:"timeout"`
+	Threshold string `yaml:"threshold"`
+}
+
+// Nlbsw is structure for NLB setting
+type Nlbsw struct {
+	Sw                      string `yaml:"sw"`
+	Version                 string `yaml:"version"`
+	CommandNlbPrepare       string `yaml:"commandNlbPrepare"`
+	CommandNlbDeploy        string `yaml:"commandNlbDeploy"`
+	CommandNlbAddTargetNode string `yaml:"commandNlbAddTargetNode"`
+	CommandNlbApplyConfig   string `yaml:"commandNlbApplyConfig"`
+	NlbMcisCommonSpec       string `yaml:"nlbMcisCommonSpec"`
+	NlbMcisCommonImage      string `yaml:"nlbMcisCommonImage"`
+	NlbMcisSubGroupSize     string `yaml:"nlbMcisSubGroupSize"`
+}
+
 // swagger:request ConfigReq
 type ConfigReq struct {
 	Name  string `json:"name" example:"SPIDER_REST_URL"`

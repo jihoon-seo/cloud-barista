@@ -14,8 +14,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	call "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/call-log"
 	"math/rand"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -23,30 +25,39 @@ import (
 	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2021-03-01/compute"
 	"github.com/Azure/azure-sdk-for-go/services/network/mgmt/2021-02-01/network"
 	"github.com/Azure/go-autorest/autorest/to"
-
-	call "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/call-log"
+	cdcom "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/common"
 	idrv "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/interfaces"
 	irs "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/interfaces/resources"
 )
 
+type AzureOSTYPE string
+
 const (
-	ProvisioningStateCode string = "ProvisioningState/succeeded"
-	VM                           = "VM"
-	PremiumSSD                   = "PremiumSSD"
-	StandardSSD                  = "StandardSSD"
-	StandardHHD                  = "StandardHHD"
+	ProvisioningStateCode string      = "ProvisioningState/succeeded"
+	VM                                = "VM"
+	PremiumSSD                        = "PremiumSSD"
+	StandardSSD                       = "StandardSSD"
+	StandardHDD                       = "StandardHDD"
+	WindowBaseUser                    = "Administrator"
+	WindowBaseGroup                   = "Administrators"
+	WindowBuitinUser                  = CBVMUser
+	UnknownOS             AzureOSTYPE = "UnknownOS"
+	WindowOS              AzureOSTYPE = "WindowOS"
+	LinuxOS               AzureOSTYPE = "LinuxOS"
 )
 
 type AzureVMHandler struct {
-	CredentialInfo idrv.CredentialInfo
-	Region         idrv.RegionInfo
-	Ctx            context.Context
-	Client         *compute.VirtualMachinesClient
-	SubnetClient   *network.SubnetsClient
-	NicClient      *network.InterfacesClient
-	PublicIPClient *network.PublicIPAddressesClient
-	DiskClient     *compute.DisksClient
-	SshKeyClient   *compute.SSHPublicKeysClient
+	CredentialInfo                  idrv.CredentialInfo
+	Region                          idrv.RegionInfo
+	Ctx                             context.Context
+	Client                          *compute.VirtualMachinesClient
+	SubnetClient                    *network.SubnetsClient
+	NicClient                       *network.InterfacesClient
+	PublicIPClient                  *network.PublicIPAddressesClient
+	DiskClient                      *compute.DisksClient
+	SshKeyClient                    *compute.SSHPublicKeysClient
+	ImageClient                     *compute.ImagesClient
+	VirtualMachineRunCommandsClient *compute.VirtualMachineRunCommandsClient
 }
 
 func (vmHandler *AzureVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, error) {
@@ -59,7 +70,8 @@ func (vmHandler *AzureVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, e
 		LoggingError(hiscallInfo, createErr)
 		return irs.VMInfo{}, createErr
 	}
-	// 1. Check Exist
+	// 1. pre Check
+	// 1-1. Exist VM
 	vmExist, err := CheckExistVM(vmReqInfo.IId, vmHandler.Region.ResourceGroup, vmHandler.Client, vmHandler.Ctx)
 	if err != nil {
 		createErr := errors.New(fmt.Sprintf("Failed to Create VM. err = %s", err))
@@ -73,6 +85,87 @@ func (vmHandler *AzureVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, e
 		LoggingError(hiscallInfo, createErr)
 		return irs.VMInfo{}, createErr
 	}
+	// 1-2. Check VMImageIID Image format, Exist Image, AuthInfo (Linux : SSHKey, Window: Password)
+	imageOsType, err := CheckVMReqInfoOSType(vmReqInfo, vmHandler.ImageClient, vmHandler.CredentialInfo, vmHandler.Region, vmHandler.Ctx)
+	if err != nil {
+		createErr := errors.New(fmt.Sprintf("Failed to Create VM. err = %s", err))
+		cblogger.Error(createErr.Error())
+		LoggingError(hiscallInfo, createErr)
+		return irs.VMInfo{}, createErr
+	}
+
+	err = checkAuthInfoOSType(vmReqInfo, imageOsType)
+	if err != nil {
+		createErr := errors.New(fmt.Sprintf("Failed to Create VM. err = %s", err.Error()))
+		cblogger.Error(createErr.Error())
+		LoggingError(hiscallInfo, createErr)
+		return irs.VMInfo{}, createErr
+	}
+	vmImage := vmReqInfo.ImageIID.SystemId
+	if vmImage == "" {
+		vmImage = vmReqInfo.ImageIID.NameId
+	}
+	if vmReqInfo.ImageType == "" || vmReqInfo.ImageType == irs.PublicImage {
+		//PublicImage
+		if strings.Contains(vmImage, ":") {
+			imageArr := strings.Split(vmImage, ":")
+			if len(imageArr) < 4 {
+				createErr := errors.New(fmt.Sprintf("Failed to Create VM. err = Invalid Public Image IID"))
+				cblogger.Error(createErr.Error())
+				LoggingError(hiscallInfo, createErr)
+				return irs.VMInfo{}, createErr
+			}
+		} else {
+			createErr := errors.New(fmt.Sprintf("Failed to Create VM. err = Invalid Public Image IID"))
+			cblogger.Error(createErr.Error())
+			LoggingError(hiscallInfo, createErr)
+			return irs.VMInfo{}, createErr
+		}
+	} else {
+		convertMyImageIId, err := ConvertMyImageIID(vmReqInfo.ImageIID, vmHandler.CredentialInfo, vmHandler.Region)
+		if err != nil {
+			createErr := errors.New(fmt.Sprintf("Failed to Start VM. err = %s", err.Error()))
+			cblogger.Error(createErr.Error())
+			LoggingError(hiscallInfo, createErr)
+			return irs.VMInfo{}, createErr
+		}
+		_, err = vmHandler.ImageClient.Get(vmHandler.Ctx, vmHandler.Region.ResourceGroup, convertMyImageIId.NameId, "")
+		if err != nil {
+			createErr := errors.New(fmt.Sprintf("Failed to Start VM. err = %s", err.Error()))
+			cblogger.Error(createErr.Error())
+			LoggingError(hiscallInfo, createErr)
+			return irs.VMInfo{}, createErr
+		}
+	}
+	rawDataDiskList := make([]compute.Disk, len(vmReqInfo.DataDiskIIDs))
+	// 1-3. Check DataDisk, Check DataDisk Status
+	if len(vmReqInfo.DataDiskIIDs) > 0 {
+		for i, dataDiskIID := range vmReqInfo.DataDiskIIDs {
+			convertedDiskIId, err := ConvertDiskIID(dataDiskIID, vmHandler.CredentialInfo, vmHandler.Region)
+			if err != nil {
+				createErr := errors.New(fmt.Sprintf("Failed to Start VM. Failed to get DataDisk err = %s", err.Error()))
+				cblogger.Error(createErr.Error())
+				LoggingError(hiscallInfo, createErr)
+				return irs.VMInfo{}, createErr
+			}
+			disk, err := GetRawDisk(convertedDiskIId, vmHandler.Region.ResourceGroup, vmHandler.DiskClient, vmHandler.Ctx)
+			if err != nil {
+				createErr := errors.New(fmt.Sprintf("Failed to Start VM. Failed to get DataDisk err = %s", err.Error()))
+				cblogger.Error(createErr.Error())
+				LoggingError(hiscallInfo, createErr)
+				return irs.VMInfo{}, createErr
+			}
+			err = CheckAttachStatus(disk)
+			if err != nil {
+				createErr := errors.New(fmt.Sprintf("Failed to Start VM. Failed to check DataDisk Status err = %s", err.Error()))
+				cblogger.Error(createErr.Error())
+				LoggingError(hiscallInfo, createErr)
+				return irs.VMInfo{}, createErr
+			}
+			rawDataDiskList[i] = disk
+		}
+	}
+
 	cleanVMClientSet := CleanVMClientSet{
 		VPCName:    vmReqInfo.VpcIID.NameId,
 		SubnetName: vmReqInfo.SubnetIID.NameId,
@@ -121,7 +214,7 @@ func (vmHandler *AzureVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, e
 				VMSize: compute.VirtualMachineSizeTypes(vmReqInfo.VMSpecName),
 			},
 			OsProfile: &compute.OSProfile{
-				ComputerName: to.StringPtr(CBVMUser),
+				ComputerName:  to.StringPtr(vmReqInfo.IId.NameId),
 				AdminUsername: to.StringPtr(CBVMUser),
 			},
 			NetworkProfile: &compute.NetworkProfile{
@@ -138,16 +231,14 @@ func (vmHandler *AzureVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, e
 		},
 	}
 	// 3-2. Set VmReqInfo - vmImage & storageType
-	vmImage := vmReqInfo.ImageIID.SystemId
-	if vmImage == "" {
-		vmImage = vmReqInfo.ImageIID.NameId
-	}
 
 	var managedDisk = new(compute.ManagedDiskParameters)
 	if vmReqInfo.RootDiskType != "" && strings.ToLower(vmReqInfo.RootDiskType) != "default" {
-		storageType := getVMDiskTypeInitType(vmReqInfo.RootDiskType)
+		storageType := GetVMDiskTypeInitType(vmReqInfo.RootDiskType)
 		managedDisk.StorageAccountType = storageType
 	}
+	// snapshotPoint Start
+
 	//storageType := getVMDiskTypeInitType(vmReqInfo.RootDiskType)
 	vmOpts.StorageProfile = &compute.StorageProfile{
 		OsDisk: &compute.OSDisk{
@@ -155,11 +246,13 @@ func (vmHandler *AzureVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, e
 			//ManagedDisk: &compute.ManagedDiskParameters{
 			//	StorageAccountType: storageType,
 			//},
-			ManagedDisk: managedDisk,
+			ManagedDisk:  managedDisk,
 			DeleteOption: compute.DiskDeleteOptionTypesDelete,
 		},
 	}
-	if strings.Contains(vmImage, ":") {
+
+	if vmReqInfo.ImageType == "" || vmReqInfo.ImageType == irs.PublicImage {
+		//PublicImage
 		imageArr := strings.Split(vmImage, ":")
 		// URN 기반 퍼블릭 이미지 설정
 		vmOpts.StorageProfile.ImageReference = &compute.ImageReference{
@@ -169,16 +262,9 @@ func (vmHandler *AzureVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, e
 			Version:   to.StringPtr(imageArr[3]),
 		}
 	} else {
-		// 사용자 프라이빗 이미지 설정
-		vmOpts.StorageProfile.ImageReference = &compute.ImageReference{
-			ID: to.StringPtr(vmImage),
-		}
-	}
-
-	// 3-2. Set VmReqInfo - KeyPair & tagging
-	if vmReqInfo.KeyPairIID.NameId != "" {
-		key, keyErr := GetRawKey(vmReqInfo.KeyPairIID, vmHandler.Region.ResourceGroup, vmHandler.SshKeyClient, vmHandler.Ctx)
-		if keyErr != nil {
+		//MyImage
+		convertMyImageIId, convertedErr := ConvertMyImageIID(vmReqInfo.ImageIID, vmHandler.CredentialInfo, vmHandler.Region)
+		if convertedErr != nil {
 			createErr := errors.New(fmt.Sprintf("Failed to Start VM. err = %s, and Finished to rollback deleting", err.Error()))
 			cleanResource := CleanVMClientRequestResource{
 				publicIPIId.NameId, vNicIId.NameId, "",
@@ -200,29 +286,72 @@ func (vmHandler *AzureVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, e
 			LoggingError(hiscallInfo, createErr)
 			return irs.VMInfo{}, createErr
 		}
-		publicKey := *key.PublicKey
-		vmOpts.OsProfile.LinuxConfiguration = &compute.LinuxConfiguration{
-			SSH: &compute.SSHConfiguration{
-				PublicKeys: &[]compute.SSHPublicKey{
-					{
-						Path:    to.StringPtr(fmt.Sprintf("/home/%s/.ssh/authorized_keys", CBVMUser)),
-						KeyData: to.StringPtr(publicKey),
+		vmOpts.StorageProfile.ImageReference = &compute.ImageReference{
+			ID: to.StringPtr(convertMyImageIId.SystemId),
+		}
+	}
+
+	if imageOsType == LinuxOS {
+		// 3-2. Set VmReqInfo - KeyPair & tagging
+		if vmReqInfo.KeyPairIID.NameId != "" {
+			key, keyErr := GetRawKey(vmReqInfo.KeyPairIID, vmHandler.Region.ResourceGroup, vmHandler.SshKeyClient, vmHandler.Ctx)
+			if keyErr != nil {
+				createErr := errors.New(fmt.Sprintf("Failed to Start VM. err = %s, and Finished to rollback deleting", err.Error()))
+				cleanResource := CleanVMClientRequestResource{
+					publicIPIId.NameId, vNicIId.NameId, "",
+				}
+				clean, deperr := vmHandler.cleanVMRelatedResource(VMCleanRelatedResource{
+					RequiredSet:         cleanVMClientSet,
+					CleanTargetResource: cleanResource,
+				})
+				if deperr != nil {
+					createErr = errors.New(fmt.Sprintf("Failed to Start VM. err = %s, and Failed to rollback err = %s", err.Error(), deperr.Error()))
+					cblogger.Error(createErr.Error())
+					LoggingError(hiscallInfo, createErr)
+					return irs.VMInfo{}, createErr
+				}
+				if !clean {
+					createErr = errors.New(fmt.Sprintf("Failed to Start VM. err = %s, and Failed to rollback deleting", err.Error()))
+				}
+				cblogger.Error(createErr.Error())
+				LoggingError(hiscallInfo, createErr)
+				return irs.VMInfo{}, createErr
+			}
+			publicKey := *key.PublicKey
+			vmOpts.OsProfile.LinuxConfiguration = &compute.LinuxConfiguration{
+				SSH: &compute.SSHConfiguration{
+					PublicKeys: &[]compute.SSHPublicKey{
+						{
+							Path:    to.StringPtr(fmt.Sprintf("/home/%s/.ssh/authorized_keys", CBVMUser)),
+							KeyData: to.StringPtr(publicKey),
+						},
 					},
 				},
-			},
-		}
-		vmOpts.Tags = map[string]*string{
-			"keypair":   to.StringPtr(vmReqInfo.KeyPairIID.NameId),
-			"publicip":  to.StringPtr(publicIPIId.NameId),
-			"createdBy": to.StringPtr(vmReqInfo.IId.NameId),
+			}
+			vmOpts.Tags = map[string]*string{
+				"keypair":   to.StringPtr(vmReqInfo.KeyPairIID.NameId),
+				"publicip":  to.StringPtr(publicIPIId.NameId),
+				"createdBy": to.StringPtr(vmReqInfo.IId.NameId),
+			}
+		} else {
+			vmOpts.OsProfile.AdminPassword = to.StringPtr(vmReqInfo.VMUserPasswd)
+			vmOpts.Tags = map[string]*string{
+				"publicip":  to.StringPtr(publicIPIId.NameId),
+				"createdBy": to.StringPtr(vmReqInfo.IId.NameId),
+			}
 		}
 	} else {
+		if len(vmReqInfo.IId.NameId) > 15 {
+			vmOpts.OsProfile.ComputerName = to.StringPtr(vmReqInfo.IId.NameId[:15])
+		}
 		vmOpts.OsProfile.AdminPassword = to.StringPtr(vmReqInfo.VMUserPasswd)
+		vmOpts.OsProfile.AdminUsername = to.StringPtr(WindowBuitinUser)
 		vmOpts.Tags = map[string]*string{
 			"publicip":  to.StringPtr(publicIPIId.NameId),
 			"createdBy": to.StringPtr(vmReqInfo.IId.NameId),
 		}
 	}
+
 	// 4. CreateVM
 	start := call.Start()
 	future, err := vmHandler.Client.CreateOrUpdate(vmHandler.Ctx, vmHandler.Region.ResourceGroup, vmReqInfo.IId.NameId, vmOpts)
@@ -297,16 +426,7 @@ func (vmHandler *AzureVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, e
 		// Get powerState, provisioningState
 		vmStatus := getVmStatus(instanceView)
 		if vmStatus == irs.Running {
-			vm, err := vmHandler.Client.Get(vmHandler.Ctx, vmHandler.Region.ResourceGroup, vmReqInfo.IId.NameId, compute.InstanceViewTypesInstanceView)
-			if err != nil {
-				createErr := errors.New(fmt.Sprintf("Failed to Start VM. err = %s, and Failed to rollback deleting", err.Error()))
-				cblogger.Error(createErr.Error())
-				LoggingError(hiscallInfo, createErr)
-				return irs.VMInfo{}, createErr
-			}
-			vmInfo := vmHandler.mappingServerInfo(vm)
-			LoggingInfo(hiscallInfo, start)
-			return vmInfo, nil
+			break
 		}
 		curRetryCnt++
 		time.Sleep(1 * time.Second)
@@ -320,6 +440,70 @@ func (vmHandler *AzureVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, e
 			LoggingError(hiscallInfo, createErr)
 			return irs.VMInfo{}, createErr
 		}
+	}
+	// 6. Window user Change
+	if imageOsType == WindowOS {
+		if vmReqInfo.ImageType == "" || vmReqInfo.ImageType == irs.PublicImage {
+			err = createAdministratorUser(vmReqInfo.IId, WindowBaseUser, vmReqInfo.VMUserPasswd, vmHandler.Client, vmHandler.VirtualMachineRunCommandsClient, vmHandler.Ctx, vmHandler.Region)
+			if err != nil {
+				createErr := errors.New(fmt.Sprintf("Failed to Start VM. err = %s, and Finished to rollback deleting", err.Error()))
+				cleanErr := vmHandler.cleanDeleteVm(vmReqInfo.IId)
+				if cleanErr != nil {
+					createErr = errors.New(fmt.Sprintf("Failed to Start VM. err = %s, and Failed to rollback err = %s", err.Error(), cleanErr.Error()))
+				}
+				cblogger.Error(createErr.Error())
+				LoggingError(hiscallInfo, createErr)
+				return irs.VMInfo{}, createErr
+			}
+		} else {
+			err = changeUserPassword(vmReqInfo.IId, WindowBaseUser, vmReqInfo.VMUserPasswd, vmHandler.Client, vmHandler.VirtualMachineRunCommandsClient, vmHandler.Ctx, vmHandler.Region)
+			if err != nil {
+				createErr := errors.New(fmt.Sprintf("Failed to Start VM. err = %s, and Finished to rollback deleting", err.Error()))
+				cleanErr := vmHandler.cleanDeleteVm(vmReqInfo.IId)
+				if cleanErr != nil {
+					createErr = errors.New(fmt.Sprintf("Failed to Start VM. err = %s, and Failed to rollback err = %s", err.Error(), cleanErr.Error()))
+				}
+				cblogger.Error(createErr.Error())
+				LoggingError(hiscallInfo, createErr)
+				return irs.VMInfo{}, createErr
+			}
+		}
+
+	}
+	// 7. If DataDisk Exist
+	if len(vmReqInfo.DataDiskIIDs) > 0 {
+		vm, err := AttachList(vmReqInfo.DataDiskIIDs, vmReqInfo.IId, vmHandler.CredentialInfo, vmHandler.Region, vmHandler.Ctx, vmHandler.Client, vmHandler.DiskClient)
+		if err != nil {
+			createErr := errors.New(fmt.Sprintf("Failed to Start VM. err = %s, and Finished to rollback deleting", err.Error()))
+			cleanErr := vmHandler.cleanDeleteVm(vmReqInfo.IId)
+			if cleanErr != nil {
+				createErr = errors.New(fmt.Sprintf("Failed to Start VM. err = %s, and Failed to rollback err = %s", err.Error(), cleanErr.Error()))
+			}
+			cblogger.Error(createErr.Error())
+			LoggingError(hiscallInfo, createErr)
+			return irs.VMInfo{}, createErr
+		}
+		vmInfo := vmHandler.mappingServerInfo(vm)
+		LoggingInfo(hiscallInfo, start)
+		return vmInfo, nil
+	} else {
+		vm, err := vmHandler.Client.Get(vmHandler.Ctx, vmHandler.Region.ResourceGroup, vmReqInfo.IId.NameId, compute.InstanceViewTypesInstanceView)
+		if err != nil {
+			createErr := errors.New(fmt.Sprintf("Failed to Start VM. err = %s, and Failed to rollback deleting", err.Error()))
+			cleanErr := vmHandler.cleanDeleteVm(vmReqInfo.IId)
+			if cleanErr != nil {
+				createErr = errors.New(fmt.Sprintf("Failed to Start VM. err = %s, and Failed to rollback err = %s", err.Error(), cleanErr.Error()))
+			}
+			cblogger.Error(createErr.Error())
+			LoggingError(hiscallInfo, createErr)
+			return irs.VMInfo{}, createErr
+		}
+		vmInfo := vmHandler.mappingServerInfo(vm)
+		if imageOsType == WindowOS {
+			vmInfo.VMUserPasswd = vmReqInfo.VMUserPasswd
+		}
+		LoggingInfo(hiscallInfo, start)
+		return vmInfo, nil
 	}
 }
 
@@ -657,6 +841,8 @@ func (vmHandler *AzureVMHandler) GetVM(vmIID irs.IID) (irs.VMInfo, error) {
 		LoggingError(hiscallInfo, getErr)
 		return irs.VMInfo{}, getErr
 	}
+	// addAdministratorUser(convertedIID, vmHandler.Client, vmHandler.VirtualMachineRunCommandsClient, vmHandler.Ctx, vmHandler.Region)
+
 	LoggingInfo(hiscallInfo, start)
 
 	vmInfo := vmHandler.mappingServerInfo(vm)
@@ -771,9 +957,9 @@ func (vmHandler *AzureVMHandler) mappingServerInfo(server compute.VirtualMachine
 		Region: irs.RegionInfo{
 			Region: *server.Location,
 		},
-		VMSpecName: string(server.VirtualMachineProperties.HardwareProfile.VMSize),
+		VMSpecName:     string(server.VirtualMachineProperties.HardwareProfile.VMSize),
 		RootDeviceName: "Not visible in Azure",
-		VMBlockDisk: "Not visible in Azure",
+		VMBlockDisk:    "Not visible in Azure",
 	}
 
 	// Set VM Zone
@@ -847,11 +1033,19 @@ func (vmHandler *AzureVMHandler) mappingServerInfo(server compute.VirtualMachine
 			vmInfo.VpcIID = irs.IID{NameId: vpcName, SystemId: strings.Join(vpcIdArr, "/")}
 		}
 	}
-
-	// Set GuestUser Id/Pwd
-	if server.VirtualMachineProperties.OsProfile.AdminUsername != nil {
-		vmInfo.VMUserId = *server.VirtualMachineProperties.OsProfile.AdminUsername
+	osType, err := getOSTypeByVM(server)
+	if err == nil {
+		if osType == WindowOS {
+			vmInfo.VMUserId = WindowBaseUser
+		}
+		if osType == LinuxOS {
+			vmInfo.VMUserId = CBVMUser
+		}
 	}
+	// Set GuestUser Id/Pwd
+	//if server.VirtualMachineProperties.OsProfile.AdminUsername != nil {
+	//	vmInfo.VMUserId = *server.VirtualMachineProperties.OsProfile.AdminUsername
+	//}
 	if server.VirtualMachineProperties.OsProfile.AdminPassword != nil {
 		vmInfo.VMUserPasswd = *server.VirtualMachineProperties.OsProfile.AdminPassword
 	}
@@ -864,7 +1058,7 @@ func (vmHandler *AzureVMHandler) mappingServerInfo(server compute.VirtualMachine
 		vmInfo.RootDiskSize = strconv.Itoa(int(*server.VirtualMachineProperties.StorageProfile.OsDisk.DiskSizeGB))
 	}
 	if server.VirtualMachineProperties.StorageProfile.OsDisk.ManagedDisk != nil {
-		vmInfo.RootDiskType = getVMDiskInfoType(server.VirtualMachineProperties.StorageProfile.OsDisk.ManagedDisk.StorageAccountType)
+		vmInfo.RootDiskType = GetVMDiskInfoType(server.VirtualMachineProperties.StorageProfile.OsDisk.ManagedDisk.StorageAccountType)
 	}
 
 	// Get StartTime
@@ -888,6 +1082,19 @@ func (vmHandler *AzureVMHandler) mappingServerInfo(server compute.VirtualMachine
 				{Key: "publicip", Value: *val},
 			}
 		}
+	}
+
+	if server.StorageProfile != nil && server.StorageProfile.DataDisks != nil && len(*server.StorageProfile.DataDisks) > 0 {
+		dataDisks := *server.StorageProfile.DataDisks
+		dataDiskIIDList := make([]irs.IID, len(dataDisks))
+		for i, dataDisk := range dataDisks {
+			diskId := *dataDisk.ManagedDisk.ID
+			dataDiskIIDList[i] = irs.IID{
+				NameId:   GetResourceNameById(diskId),
+				SystemId: diskId,
+			}
+		}
+		vmInfo.DataDiskIIDs = dataDiskIIDList
 	}
 
 	return vmInfo
@@ -1274,30 +1481,42 @@ func ConvertVMIID(vmIID irs.IID, credentialInfo idrv.CredentialInfo, regionInfo 
 	}
 }
 
-func getVMDiskTypeInitType(diskType string) compute.StorageAccountTypes {
-	switch diskType {
-	case PremiumSSD:
-		return compute.StorageAccountTypesPremiumLRS
-	case StandardSSD:
-		return compute.StorageAccountTypesStandardSSDLRS
-	case StandardHHD:
-		return compute.StorageAccountTypesStandardLRS
-	default:
-		return compute.StorageAccountTypesPremiumLRS
+func checkAuthInfoOSType(vmReqInfo irs.VMReqInfo, OSType AzureOSTYPE) error {
+	if OSType == WindowOS {
+		_, idErr := windowUserIdCheck(vmReqInfo.VMUserId)
+		if idErr != nil {
+			return idErr
+		}
+		pwErr := cdcom.ValidateWindowsPassword(vmReqInfo.VMUserPasswd)
+		if pwErr != nil {
+			return pwErr
+		}
+		//if vmReqInfo.KeyPairIID.NameId != "" || vmReqInfo.KeyPairIID.SystemId != "" {
+		//	return errors.New("for Windows, SSH key login method is not supported")
+		//}
+		computeErr := checkComputerNameWindow(vmReqInfo)
+		if computeErr != nil {
+			return computeErr
+		}
 	}
+	if OSType == LinuxOS {
+		if vmReqInfo.KeyPairIID.NameId == "" && vmReqInfo.KeyPairIID.SystemId == "" {
+			return errors.New("for Linux, KeyPairIID is required")
+		}
+	}
+	return nil
 }
 
-func getVMDiskInfoType(diskType compute.StorageAccountTypes) string {
-	switch diskType {
-	case compute.StorageAccountTypesPremiumLRS:
-		return PremiumSSD
-	case compute.StorageAccountTypesStandardSSDLRS:
-		return StandardSSD
-	case compute.StorageAccountTypesStandardLRS:
-		return StandardHHD
-	default:
-		return string(diskType)
+func checkComputerNameWindow(vmReqInfo irs.VMReqInfo) error {
+	//if len(vmReqInfo.IId.NameId) > 15 {
+	//	return errors.New("for Windows, VM's computeName cannot exceed 15 characters")
+	//}
+	// https://learn.microsoft.com/ko-KR/troubleshoot/windows-server/identity/naming-conventions-for-computer-domain-site-ou
+	matchCase, _ := regexp.MatchString(`[\/?:|*<>\\\"]+`, vmReqInfo.IId.NameId)
+	if matchCase {
+		return errors.New("for Windows, VM's computeName contains unacceptable special characters")
 	}
+	return nil
 }
 
 func checkVMReqInfo(vmReqInfo irs.VMReqInfo) error {
@@ -1313,11 +1532,122 @@ func checkVMReqInfo(vmReqInfo irs.VMReqInfo) error {
 	if vmReqInfo.SubnetIID.NameId == "" && vmReqInfo.SubnetIID.SystemId == "" {
 		return errors.New("invalid VM SubnetIID")
 	}
-	if vmReqInfo.KeyPairIID.NameId == "" && vmReqInfo.KeyPairIID.SystemId == "" && vmReqInfo.VMUserPasswd == "" {
-		return errors.New("specify one login method, Password or Keypair")
-	}
+	//if vmReqInfo.KeyPairIID.NameId == "" && vmReqInfo.KeyPairIID.SystemId == "" && vmReqInfo.VMUserPasswd == "" {
+	//	return errors.New("specify one login method, Password or Keypair")
+	//}
 	if vmReqInfo.VMSpecName == "" {
 		return errors.New("invalid VM VMSpecName")
 	}
+
 	return nil
+}
+
+func createAdministratorUser(vmIID irs.IID, newusername string, newpassword string, virtualMachinesClient *compute.VirtualMachinesClient, virtualMachineRunCommandsClient *compute.VirtualMachineRunCommandsClient, ctx context.Context, region idrv.RegionInfo) error {
+	rawVm, err := GetRawVM(vmIID, region.ResourceGroup, virtualMachinesClient, ctx)
+	if err != nil {
+		return errors.New(fmt.Sprintf("failed window User Add %s", err.Error()))
+	}
+	runOpt := compute.VirtualMachineRunCommand{
+		VirtualMachineRunCommandProperties: &compute.VirtualMachineRunCommandProperties{
+			Source: &compute.VirtualMachineRunCommandScriptSource{
+				// Script: to.StringPtr(fmt.Sprintf("net user /add administrator qwe1212!Q; net localgroup administrators cb-user /add; net user /delete administrator;")),
+				Script: to.StringPtr(fmt.Sprintf("net user /add %s %s; net localgroup %s %s /add", newusername, newpassword, WindowBaseGroup, newusername)),
+			},
+		},
+		Location: to.StringPtr(region.Region),
+	}
+	runCommandResult, err := virtualMachineRunCommandsClient.CreateOrUpdate(ctx, region.ResourceGroup, *rawVm.Name, "RunPowerShellScript", runOpt)
+	if err != nil {
+		return errors.New(fmt.Sprintf("failed window User Add %s", err.Error()))
+	}
+	err = runCommandResult.WaitForCompletionRef(ctx, virtualMachineRunCommandsClient.Client)
+	if err != nil {
+		return errors.New(fmt.Sprintf("failed window User Add %s", err.Error()))
+	}
+	return nil
+}
+
+func changeUserPassword(vmIID irs.IID, username string, newpassword string, virtualMachinesClient *compute.VirtualMachinesClient, virtualMachineRunCommandsClient *compute.VirtualMachineRunCommandsClient, ctx context.Context, region idrv.RegionInfo) error {
+	rawVm, err := GetRawVM(vmIID, region.ResourceGroup, virtualMachinesClient, ctx)
+	if err != nil {
+		return errors.New(fmt.Sprintf("failed window User Add %s", err.Error()))
+	}
+	runOpt := compute.VirtualMachineRunCommand{
+		VirtualMachineRunCommandProperties: &compute.VirtualMachineRunCommandProperties{
+			Source: &compute.VirtualMachineRunCommandScriptSource{
+				Script: to.StringPtr(fmt.Sprintf("net user %s %s; net user %s %s;", username, newpassword, WindowBuitinUser, newpassword)),
+			},
+		},
+		Location: to.StringPtr(region.Region),
+	}
+	runCommandResult, err := virtualMachineRunCommandsClient.CreateOrUpdate(ctx, region.ResourceGroup, *rawVm.Name, "RunPowerShellScript", runOpt)
+	if err != nil {
+		return errors.New(fmt.Sprintf("failed window User Add %s", err.Error()))
+	}
+	err = runCommandResult.WaitForCompletionRef(ctx, virtualMachineRunCommandsClient.Client)
+	if err != nil {
+		return errors.New(fmt.Sprintf("failed window User Add %s", err.Error()))
+	}
+	return nil
+}
+
+func CheckVMReqInfoOSType(vmReqInfo irs.VMReqInfo, imageClient *compute.ImagesClient, credentialInfo idrv.CredentialInfo, region idrv.RegionInfo, ctx context.Context) (AzureOSTYPE, error) {
+	if vmReqInfo.ImageType == "" || vmReqInfo.ImageType == irs.PublicImage {
+		return getOSTypeByPublicImage(vmReqInfo.ImageIID)
+	} else {
+		return getOSTypeByMyImage(vmReqInfo.ImageIID, imageClient, credentialInfo, region, ctx)
+	}
+}
+
+func getOSTypeByVM(server compute.VirtualMachine) (AzureOSTYPE, error) {
+	if server.OsProfile.LinuxConfiguration != nil {
+		return LinuxOS, nil
+	}
+	return WindowOS, nil
+}
+
+func getOSTypeByPublicImage(imageIID irs.IID) (AzureOSTYPE, error) {
+	if imageIID.NameId == "" && imageIID.SystemId == "" {
+		return UnknownOS, errors.New("failed get OSType By ImageIID err = empty ImageIID")
+	}
+	imageName := imageIID.NameId
+	if imageIID.NameId == "" {
+		imageName = imageIID.SystemId
+	}
+	imageNameSplits := strings.Split(imageName, ":")
+	if len(imageNameSplits) != 4 {
+		return UnknownOS, errors.New("failed get OSType By ImageIID err = invalid ImageIID, Image Name must be in the form of 'Publisher:Offer:Sku:Version'. ")
+	}
+	offer := imageNameSplits[1]
+	if strings.Contains(strings.ToLower(offer), "window") {
+		return WindowOS, nil
+	}
+	return LinuxOS, nil
+}
+
+func getOSTypeByMyImage(myImageIID irs.IID, imageClient *compute.ImagesClient, credentialInfo idrv.CredentialInfo, region idrv.RegionInfo, ctx context.Context) (AzureOSTYPE, error) {
+	convertedMyImageIID, err := ConvertMyImageIID(myImageIID, credentialInfo, region)
+	if err != nil {
+		return UnknownOS, errors.New(fmt.Sprintf("failed get OSType By MyImageIID err = %s", err.Error()))
+	}
+	myImage, err := imageClient.Get(ctx, region.ResourceGroup, convertedMyImageIID.NameId, "")
+	if err != nil {
+		return UnknownOS, errors.New(fmt.Sprintf("failed get OSType By MyImageIID err = failed get MyImage err = %s", err.Error()))
+	}
+	if reflect.ValueOf(myImage.StorageProfile.OsDisk).IsNil() {
+		return UnknownOS, errors.New(fmt.Sprintf("failed get OSType By MyImageIID err = empty MyImage OSType"))
+	}
+	if myImage.StorageProfile.OsDisk.OsType == compute.OperatingSystemTypesLinux {
+		return LinuxOS, nil
+	}
+	if myImage.StorageProfile.OsDisk.OsType == compute.OperatingSystemTypesWindows {
+		return WindowOS, nil
+	}
+	return UnknownOS, errors.New(fmt.Sprintf("failed get OSType By MyImageIID err = empty MyImage OSType"))
+}
+func windowUserIdCheck(userId string) (bool, error) {
+	if userId == "Administrator" {
+		return true, nil
+	}
+	return false, errors.New("for Windows, the userId only provides Administrator")
 }

@@ -69,7 +69,9 @@ func init() {
 	// register validation for 'Tb*Req'
 	// NOTE: only have to register a non-pointer type for 'Tb*Req', validator
 	// internally dereferences during it's type checks.
+	validate.RegisterStructValidation(TbDataDiskReqStructLevelValidation, TbDataDiskReq{})
 	validate.RegisterStructValidation(TbImageReqStructLevelValidation, TbImageReq{})
+	validate.RegisterStructValidation(TbCustomImageReqStructLevelValidation, TbCustomImageReq{})
 	validate.RegisterStructValidation(TbSecurityGroupReqStructLevelValidation, TbSecurityGroupReq{})
 	validate.RegisterStructValidation(TbSpecReqStructLevelValidation, TbSpecReq{})
 	validate.RegisterStructValidation(TbSshKeyReqStructLevelValidation, TbSshKeyReq{})
@@ -101,7 +103,7 @@ func DelAllResources(nsId string, resourceType string, subString string, forceFl
 	}
 
 	for _, v := range resourceIdList {
-		// if subSting is provided, check the resourceId contains the subString.
+		// if subString is provided, check the resourceId contains the subString.
 		if subString == "" || strings.Contains(v, subString) {
 			deleteStatus = ""
 
@@ -153,6 +155,7 @@ func DelResource(nsId string, resourceType string, resourceId string, forceFlag 
 	// In CheckResource() above, calling 'CBStore.Get()' and checking err parts exist.
 	// So, in here, we don't need to check whether keyValue == nil or err != nil.
 
+	/* Disabled the deletion protection feature
 	associatedList, _ := GetAssociatedObjectList(nsId, resourceType, resourceId)
 	if len(associatedList) == 0 {
 		// continue
@@ -162,6 +165,7 @@ func DelResource(nsId string, resourceType string, resourceId string, forceFlag 
 		common.CBLog.Error(err)
 		return err
 	}
+	*/
 
 	//cspType := common.GetResourcesCspType(nsId, resourceType, resourceId)
 
@@ -195,6 +199,34 @@ func DelResource(nsId string, resourceType string, resourceId string, forceFlag 
 			}
 
 			return nil
+		case common.StrCustomImage:
+			temp := TbCustomImageInfo{}
+			err = json.Unmarshal([]byte(keyValue.Value), &temp)
+			if err != nil {
+				common.CBLog.Error(err)
+				return err
+			}
+			tempReq.ConnectionName = temp.ConnectionName
+			url = common.SpiderRestUrl + "/myimage/" + temp.CspCustomImageName
+
+			/*
+				// delete image info
+				err := common.CBStore.Delete(key)
+				if err != nil {
+					common.CBLog.Error(err)
+					return err
+				}
+
+				// "DELETE FROM `image` WHERE `id` = '" + resourceId + "';"
+				_, err = common.ORM.Delete(&TbCustomImageInfo{Namespace: nsId, Id: resourceId})
+				if err != nil {
+					fmt.Println(err.Error())
+				} else {
+					fmt.Println("Data deleted successfully..")
+				}
+
+				return nil
+			*/
 		case common.StrSpec:
 			// delete spec info
 
@@ -250,6 +282,15 @@ func DelResource(nsId string, resourceType string, resourceId string, forceFlag 
 			}
 			tempReq.ConnectionName = temp.ConnectionName
 			url = common.SpiderRestUrl + "/securitygroup/" + temp.CspSecurityGroupName
+		case common.StrDataDisk:
+			temp := TbDataDiskInfo{}
+			err = json.Unmarshal([]byte(keyValue.Value), &temp)
+			if err != nil {
+				common.CBLog.Error(err)
+				return err
+			}
+			tempReq.ConnectionName = temp.ConnectionName
+			url = common.SpiderRestUrl + "/disk/" + temp.CspDataDiskName
 		/*
 			case "subnet":
 				temp := subnetInfo{}
@@ -430,6 +471,22 @@ func DelResource(nsId string, resourceType string, resourceId string, forceFlag 
 				return err
 			}
 
+		/*
+			case common.StrDataDisk:
+				temp := TbSecurityGroupInfo{}
+				err := json.Unmarshal([]byte(keyValue.Value), &temp)
+				if err != nil {
+					common.CBLog.Error(err)
+					return err
+				}
+
+				_, err = ccm.DeleteDataDiskByParam(temp.ConnectionName, temp.Name, forceFlag)
+				if err != nil {
+					common.CBLog.Error(err)
+					return err
+				}
+		*/
+
 		default:
 			err := fmt.Errorf("invalid resourceType")
 			return err
@@ -455,6 +512,14 @@ func DelResource(nsId string, resourceType string, resourceId string, forceFlag 
 				common.CBLog.Error(err)
 				// return err
 			}
+		}
+	} else if resourceType == common.StrCustomImage {
+		// "DELETE FROM `image` WHERE `id` = '" + resourceId + "';"
+		_, err = common.ORM.Delete(&TbCustomImageInfo{Namespace: nsId, Id: resourceId})
+		if err != nil {
+			fmt.Println(err.Error())
+		} else {
+			fmt.Println("Data deleted successfully..")
 		}
 	}
 
@@ -687,8 +752,8 @@ func DelChildResource(nsId string, resourceType string, parentResourceId string,
 }
 
 // DelEleInSlice delete an element from slice by index
-//  - arr: the reference of slice
-//  - index: the index of element will be deleted
+//   - arr: the reference of slice
+//   - index: the index of element will be deleted
 func DelEleInSlice(arr interface{}, index int) {
 	vField := reflect.ValueOf(arr)
 	value := vField.Elem()
@@ -708,13 +773,15 @@ func ListResourceId(nsId string, resourceType string) ([]string, error) {
 	}
 
 	if resourceType == common.StrImage ||
+		resourceType == common.StrCustomImage ||
 		resourceType == common.StrSSHKey ||
 		resourceType == common.StrSpec ||
 		resourceType == common.StrVNet ||
 		//resourceType == "subnet" ||
 		//resourceType == "publicIp" ||
 		//resourceType == "vNic" ||
-		resourceType == common.StrSecurityGroup {
+		resourceType == common.StrSecurityGroup ||
+		resourceType == common.StrDataDisk {
 		// continue
 	} else {
 		err = fmt.Errorf("invalid resource type")
@@ -764,13 +831,15 @@ func ListResource(nsId string, resourceType string, filterKey string, filterVal 
 	}
 
 	if resourceType == common.StrImage ||
+		resourceType == common.StrCustomImage ||
 		resourceType == common.StrSSHKey ||
 		resourceType == common.StrSpec ||
 		resourceType == common.StrVNet ||
 		//resourceType == "subnet" ||
 		//resourceType == "publicIp" ||
 		//resourceType == "vNic" ||
-		resourceType == common.StrSecurityGroup {
+		resourceType == common.StrSecurityGroup ||
+		resourceType == common.StrDataDisk {
 		// continue
 	} else {
 		errString := "Cannot list " + resourceType + "s."
@@ -801,6 +870,43 @@ func ListResource(nsId string, resourceType string, filterKey string, filterVal 
 					common.CBLog.Error(err)
 					return nil, err
 				}
+				// Check the JSON body inclues both filterKey and filterVal strings. (assume key and value)
+				if filterKey != "" {
+					// If not inclues both, do not append current item to the list result.
+					itemValueForCompare := strings.ToLower(v.Value)
+					if !(strings.Contains(itemValueForCompare, strings.ToLower(filterKey)) && strings.Contains(itemValueForCompare, strings.ToLower(filterVal))) {
+						continue
+					}
+				}
+				res = append(res, tempObj)
+			}
+			return res, nil
+		case common.StrCustomImage:
+			res := []TbCustomImageInfo{}
+			for _, v := range keyValue {
+
+				tempObj := TbCustomImageInfo{}
+				err = json.Unmarshal([]byte(v.Value), &tempObj)
+				if err != nil {
+					common.CBLog.Error(err)
+					return nil, err
+				}
+
+				// Update TB CustomImage object's 'status' field
+				// Just calling GetResource(customImage) once will update TB CustomImage object's 'status' field
+				newObj, err := GetResource(nsId, common.StrCustomImage, tempObj.Id)
+				// do not return here to gather whole list. leave error message in the return body.
+				if newObj != nil {
+					tempObj = newObj.(TbCustomImageInfo)
+				} else {
+					tempObj.Id = tempObj.Id
+				}
+				if err != nil {
+					common.CBLog.Error(err)
+					tempObj.Description = err.Error()
+					tempObj.Status = "Error"
+				}
+
 				// Check the JSON body inclues both filterKey and filterVal strings. (assume key and value)
 				if filterKey != "" {
 					// If not inclues both, do not append current item to the list result.
@@ -892,25 +998,54 @@ func ListResource(nsId string, resourceType string, filterKey string, filterVal 
 				res = append(res, tempObj)
 			}
 			return res, nil
+		case common.StrDataDisk:
+			res := []TbDataDiskInfo{}
+			for _, v := range keyValue {
+				tempObj := TbDataDiskInfo{}
+				err = json.Unmarshal([]byte(v.Value), &tempObj)
+				if err != nil {
+					common.CBLog.Error(err)
+					return nil, err
+				}
+
+				// Update TB DataDisk object's 'status' field
+				// Just calling GetResource(dataDisk) once will update TB DataDisk object's 'status' field
+				newObj, err := GetResource(nsId, common.StrDataDisk, tempObj.Id)
+				if err != nil {
+					common.CBLog.Error(err)
+					return nil, err
+				}
+				tempObj = newObj.(TbDataDiskInfo)
+
+				// Check the JSON body inclues both filterKey and filterVal strings. (assume key and value)
+				if filterKey != "" {
+					// If not inclues both, do not append current item to the list result.
+					itemValueForCompare := strings.ToLower(v.Value)
+					if !(strings.Contains(itemValueForCompare, strings.ToLower(filterKey)) && strings.Contains(itemValueForCompare, strings.ToLower(filterVal))) {
+						continue
+					}
+				}
+				res = append(res, tempObj)
+			}
+			return res, nil
 		}
 
 	} else { //return empty object according to resourceType
 		switch resourceType {
 		case common.StrImage:
-			res := []TbImageInfo{}
-			return res, nil
+			return []TbImageInfo{}, nil
+		case common.StrCustomImage:
+			return []TbCustomImageInfo{}, nil
 		case common.StrSecurityGroup:
-			res := []TbSecurityGroupInfo{}
-			return res, nil
+			return []TbSecurityGroupInfo{}, nil
 		case common.StrSpec:
-			res := []TbSpecInfo{}
-			return res, nil
+			return []TbSpecInfo{}, nil
 		case common.StrSSHKey:
-			res := []TbSshKeyInfo{}
-			return res, nil
+			return []TbSshKeyInfo{}, nil
 		case common.StrVNet:
-			res := []TbVNetInfo{}
-			return res, nil
+			return []TbVNetInfo{}, nil
+		case common.StrDataDisk:
+			return []TbDataDiskInfo{}, nil
 		}
 	}
 
@@ -1146,7 +1281,7 @@ func GetResource(nsId string, resourceType string, resourceId string) (interface
 	}
 
 	if !check {
-		errString := "The " + resourceType + " " + resourceId + " does not exist."
+		errString := fmt.Sprintf("The %s %s does not exist.", resourceType, resourceId)
 		err := fmt.Errorf(errString)
 		return nil, err
 	}
@@ -1169,6 +1304,51 @@ func GetResource(nsId string, resourceType string, resourceId string) (interface
 				common.CBLog.Error(err)
 				return nil, err
 			}
+			return res, nil
+		case common.StrCustomImage:
+			res := TbCustomImageInfo{}
+			err = json.Unmarshal([]byte(keyValue.Value), &res)
+			if err != nil {
+				common.CBLog.Error(err)
+				return nil, err
+			}
+
+			// Update TB CustomImage object's 'status' field
+			url := fmt.Sprintf("%s/myimage/%s", common.SpiderRestUrl, res.CspCustomImageName)
+
+			client := resty.New().SetCloseConnection(true)
+			client.SetAllowGetMethodPayload(true)
+
+			connectionName := common.SpiderConnectionName{
+				ConnectionName: res.ConnectionName,
+			}
+
+			req := client.R().
+				SetHeader("Content-Type", "application/json").
+				SetBody(connectionName).
+				SetResult(&SpiderMyImageInfo{}) // or SetResult(AuthSuccess{}).
+				//SetError(&AuthError{}).       // or SetError(AuthError{}).
+
+			resp, err := req.Get(url)
+			if err != nil {
+				common.CBLog.Error(err)
+				return nil, err
+			}
+
+			fmt.Printf("HTTP Status code: %d \n", resp.StatusCode())
+			switch {
+			case resp.StatusCode() >= 400 || resp.StatusCode() < 200:
+				err := fmt.Errorf(string(resp.Body()))
+				fmt.Println("body: ", string(resp.Body()))
+				common.CBLog.Error(err)
+				return nil, err
+			}
+
+			updatedSpiderMyImage := resp.Result().(*SpiderMyImageInfo)
+			res.Status = updatedSpiderMyImage.Status
+			fmt.Printf("res.Status: %s \n", res.Status) // for debug
+			UpdateResourceObject(nsId, common.StrCustomImage, res)
+
 			return res, nil
 		case common.StrSecurityGroup:
 			res := TbSecurityGroupInfo{}
@@ -1202,6 +1382,51 @@ func GetResource(nsId string, resourceType string, resourceId string) (interface
 				return nil, err
 			}
 			return res, nil
+		case common.StrDataDisk:
+			res := TbDataDiskInfo{}
+			err = json.Unmarshal([]byte(keyValue.Value), &res)
+			if err != nil {
+				common.CBLog.Error(err)
+				return nil, err
+			}
+
+			// Update TB DataDisk object's 'status' field
+			url := fmt.Sprintf("%s/disk/%s", common.SpiderRestUrl, res.CspDataDiskName)
+
+			client := resty.New().SetCloseConnection(true)
+			client.SetAllowGetMethodPayload(true)
+
+			connectionName := common.SpiderConnectionName{
+				ConnectionName: res.ConnectionName,
+			}
+
+			req := client.R().
+				SetHeader("Content-Type", "application/json").
+				SetBody(connectionName).
+				SetResult(&SpiderDiskInfo{}) // or SetResult(AuthSuccess{}).
+				//SetError(&AuthError{}).       // or SetError(AuthError{}).
+
+			resp, err := req.Get(url)
+			if err != nil {
+				common.CBLog.Error(err)
+				return nil, err
+			}
+
+			fmt.Printf("HTTP Status code: %d \n", resp.StatusCode())
+			switch {
+			case resp.StatusCode() >= 400 || resp.StatusCode() < 200:
+				err := fmt.Errorf(string(resp.Body()))
+				fmt.Println("body: ", string(resp.Body()))
+				common.CBLog.Error(err)
+				return nil, err
+			}
+
+			updatedSpiderDisk := resp.Result().(*SpiderDiskInfo)
+			res.Status = updatedSpiderDisk.Status
+			fmt.Printf("res.Status: %s \n", res.Status) // for debug
+			UpdateResourceObject(nsId, common.StrDataDisk, res)
+
+			return res, nil
 		}
 
 		//return true, nil
@@ -1228,10 +1453,12 @@ func CheckResource(nsId string, resourceType string, resourceId string) (bool, e
 
 	// Check resourceType's validity
 	if resourceType == common.StrImage ||
+		resourceType == common.StrCustomImage ||
 		resourceType == common.StrSSHKey ||
 		resourceType == common.StrSpec ||
 		resourceType == common.StrVNet ||
-		resourceType == common.StrSecurityGroup {
+		resourceType == common.StrSecurityGroup ||
+		resourceType == common.StrDataDisk {
 		//resourceType == "subnet" ||
 		//resourceType == "publicIp" ||
 		//resourceType == "vNic" {
@@ -1359,24 +1586,35 @@ func convertSpiderResourceToTumblebugResource(resourceType string, i interface{}
 
 // https://stackoverflow.com/questions/45139954/dynamic-struct-as-parameter-golang
 
-type ReturnValue struct {
-	CustomStruct interface{}
-}
-
-type NameOnly struct {
+type IdNameOnly struct {
+	Id   string
 	Name string
 }
 
-// GetNameFromStruct accepts any struct for argument, and returns
-func GetNameFromStruct(u interface{}) string {
-	var result = ReturnValue{CustomStruct: u}
-
-	msg, ok := result.CustomStruct.(NameOnly)
-	if ok {
-		return msg.Name
-	} else {
-		return ""
+// GetIdFromStruct accepts any struct for argument, and returns value of the field 'Id'
+func GetIdFromStruct(u interface{}) (string, error) {
+	jsonInByteStream, err := json.Marshal(u)
+	if err != nil {
+		return "", err
 	}
+
+	idStruct := IdNameOnly{}
+	json.Unmarshal(jsonInByteStream, &idStruct)
+
+	return idStruct.Id, nil
+}
+
+// GetNameFromStruct accepts any struct for argument, and returns value of the field 'Name'
+func GetNameFromStruct(u interface{}) (string, error) {
+	jsonInByteStream, err := json.Marshal(u)
+	if err != nil {
+		return "", err
+	}
+
+	idStruct := IdNameOnly{}
+	json.Unmarshal(jsonInByteStream, &idStruct)
+
+	return idStruct.Name, nil
 }
 
 // LoadCommonResource is to register common resources from asset files (../assets/*.csv)
@@ -1416,14 +1654,15 @@ func LoadCommonResource() (common.IdList, error) {
 	waitSpecImg.Add(1)
 	go func(rows [][]string) {
 		defer waitSpecImg.Done()
+		lenSpecs := len(rows[1:])
 		for i, row := range rows[1:] {
 			wait.Add(1)
 			fmt.Printf("[%d] i, row := range rows[1:] %s\n", i, row)
 			// goroutine
-			go func(i int, row []string) {
+			go func(i int, row []string, lenSpecs int) {
 				defer wait.Done()
 				// RandomSleep for safe parallel executions
-				common.RandomSleep(0, 20)
+				common.RandomSleep(0, lenSpecs/8)
 				specReqTmp := TbSpecReq{}
 				// 0	providerName
 				// 1	regionName
@@ -1521,7 +1760,7 @@ func LoadCommonResource() (common.IdList, error) {
 					}
 				}
 				regiesteredIds.IdList = append(regiesteredIds.IdList, common.StrSpec+": "+specObjId+regiesteredStatus)
-			}(i, row)
+			}(i, row, lenSpecs)
 		}
 		wait.Wait()
 	}(rows)
@@ -1540,14 +1779,15 @@ func LoadCommonResource() (common.IdList, error) {
 	waitSpecImg.Add(1)
 	go func(rows [][]string) {
 		defer waitSpecImg.Done()
+		lenImages := len(rows[1:])
 		for i, row := range rows[1:] {
 			wait.Add(1)
 			fmt.Printf("[%d] i, row := range rows[1:] %s\n", i, row)
 			// goroutine
-			go func(i int, row []string) {
+			go func(i int, row []string, lenImages int) {
 				defer wait.Done()
 				// RandomSleep for safe parallel executions
-				common.RandomSleep(0, 20)
+				common.RandomSleep(0, lenImages/8)
 				imageReqTmp := TbImageReq{}
 				// row0: ProviderName
 				// row1: connectionName
@@ -1600,7 +1840,7 @@ func LoadCommonResource() (common.IdList, error) {
 				}
 				//regiesteredStatus = strings.Replace(regiesteredStatus, "\\", "", -1)
 				regiesteredIds.IdList = append(regiesteredIds.IdList, common.StrImage+": "+imageObjId+regiesteredStatus)
-			}(i, row)
+			}(i, row, lenImages)
 		}
 		wait.Wait()
 	}(rows)
@@ -1804,3 +2044,77 @@ func ToNamingRuleCompatible(rawName string) string {
 	rawName = strings.ToLower(rawName)
 	return rawName
 }
+
+// UpdateResourceObject is func to update the resource object
+func UpdateResourceObject(nsId string, resourceType string, resourceObject interface{}) {
+	resourceId, err := GetIdFromStruct(resourceObject)
+	fmt.Printf("in UpdateResourceObject; extracted resourceId: %s \n", resourceId) // for debug
+	if resourceId == "" || err != nil {
+		fmt.Printf("in UpdateResourceObject; failed to extract resourceId. \n") // for debug
+		return
+	}
+
+	key := common.GenResourceKey(nsId, resourceType, resourceId)
+
+	// Check existence of the key. If no key, no update.
+	keyValue, err := common.CBStore.Get(key)
+	if keyValue == nil || err != nil {
+		return
+	}
+
+	/*
+		// Implementation 1
+		oldJSON := keyValue.Value
+		newJSON, err := json.Marshal(resourceObject)
+		if err != nil {
+			common.CBLog.Error(err)
+		}
+
+		isEqualJSON, err := AreEqualJSON(oldJSON, string(newJSON))
+		if err != nil {
+			common.CBLog.Error(err)
+		}
+
+		if !isEqualJSON {
+			err = common.CBStore.Put(key, string(newJSON))
+			if err != nil {
+				common.CBLog.Error(err)
+			}
+		}
+	*/
+
+	// Implementation 2
+	var oldObject interface{}
+	err = json.Unmarshal([]byte(keyValue.Value), &oldObject)
+	if err != nil {
+		common.CBLog.Error(err)
+	}
+
+	if !reflect.DeepEqual(oldObject, resourceObject) {
+		val, _ := json.Marshal(resourceObject)
+		err = common.CBStore.Put(key, string(val))
+		if err != nil {
+			common.CBLog.Error(err)
+		}
+	}
+
+}
+
+/*
+func AreEqualJSON(s1, s2 string) (bool, error) {
+	var o1 interface{}
+	var o2 interface{}
+
+	var err error
+	err = json.Unmarshal([]byte(s1), &o1)
+	if err != nil {
+		return false, fmt.Errorf("Error mashalling string 1 :: %s", err.Error())
+	}
+	err = json.Unmarshal([]byte(s2), &o2)
+	if err != nil {
+		return false, fmt.Errorf("Error mashalling string 2 :: %s", err.Error())
+	}
+
+	return reflect.DeepEqual(o1, o2), nil
+}
+*/

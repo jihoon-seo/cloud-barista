@@ -240,8 +240,8 @@ func Driver(c echo.Context) error {
 		nameList := cloudosList()
 		htmlStr += `
 			<tr bgcolor="#FFFFFF" align="center" height="30">
-			    <td>
-				    <font size=2>#</font>
+			    <td bgcolor="#FFEFBA">
+                                    <font size=2>&nbsp;create:&nbsp;</font>
 			    </td>
 			    <td>
 				<!-- <input style="font-size:12px;text-align:center;" type="text" name="text_box" id="1" value="AWS"> -->
@@ -274,6 +274,19 @@ func Driver(c echo.Context) error {
 
 //fmt.Println(htmlStr)
 	return c.HTML(http.StatusOK, htmlStr)
+}
+
+func cloudosList() []string {
+	resBody, err := getResourceList_JsonByte("cloudos")
+	if err != nil {
+		cblog.Error(err)
+	}
+	var info struct {
+		ResultList []string `json:"cloudos"`
+	}
+	json.Unmarshal(resBody, &info)
+
+	return info.ResultList
 }
 
 func genLoggingGETResURL(rsType string) string {
@@ -323,7 +336,7 @@ func makeOnchangeCredentialProviderFunc_js() string {
 			credentialInfo = '[{"Key":"IdentityEndpoint", "Value":"http://123.456.789.123:5000/v3"}, {"Key":"Username", "Value":"etri"}, {"Key":"Password", "Value":"xxxx"}, {"Key":"DomainName", "Value":"default"}, {"Key":"ProjectID", "Value":"xxxx"}]'
 		    break;
 		  case "CLOUDIT":
-			credentialInfo = '[{"Key":"IdentityEndpoint", "Value":"http://xxx.xxx.co.kr:9090"}, {"Key":"AuthToken", "Value":"xxxx"}, {"Key":"Username", "Value":"xxxx"}, {"Key":"Password", "Value":"xxxx"}, {"Key":"TenantId", "Value":"tnt0009"}]'
+			credentialInfo = '[{"Key":"IdentityEndpoint", "Value":"http://xxx.xxx.co.kr:9090"}, {"Key":"AuthToken", "Value":"xxxx"}, {"Key":"Username", "Value":"xxxx"}, {"Key":"Password", "Value":"xxxx"}, {"Key":"TenantId", "Value":"tnt0009"}, {"Key":"ClusterId", "Value":"CL"}]'
 		    break;
 		  case "DOCKER":
 			credentialInfo = '[{"Key":"Host", "Value":"http://123.456.789.123:1004"}, {"Key":"APIVersion", "Value":"v1.38"}]'
@@ -553,8 +566,8 @@ func Credential(c echo.Context) error {
 		nameList := cloudosList()
                 htmlStr += `
                         <tr bgcolor="#FFFFFF" align="center" height="30">
-                            <td>
-                                    <font size=2>#</font>
+                            <td bgcolor="#FFEFBA">
+                                    <font size=2>&nbsp;create:&nbsp;</font>
                             </td>
                             <td>
 				<!-- <input style="font-size:12px;text-align:center;" type="text" name="text_box" id="1" value="AWS"> -->
@@ -877,8 +890,8 @@ func Region(c echo.Context) error {
 		nameList := cloudosList()
                 htmlStr += `
                         <tr bgcolor="#FFFFFF" align="center" height="30">
-                            <td>
-                                    <font size=2>#</font>
+                            <td bgcolor="#FFEFBA">
+                                    <font size=2>&nbsp;create:&nbsp;</font>
                             </td>
                             <td>
                 <!-- <input style="font-size:12px;text-align:center;" type="text" name="text_box" id="1" value="AWS"> -->
@@ -1134,6 +1147,18 @@ func makeSetupConnectionConfigFunc_js() string {
                         a = parent.frames["top_frame"].document.getElementById("nlbmgmtHref");
                         a.href = "nlbmgmt/" + configName
 
+                        // for disk 
+                        a = parent.frames["top_frame"].document.getElementById("diskHref");
+                        a.href = "disk/" + configName
+                        a = parent.frames["top_frame"].document.getElementById("diskmgmtHref");
+                        a.href = "diskmgmt/" + configName
+
+                        // for myimage 
+                        a = parent.frames["top_frame"].document.getElementById("myimageHref");
+                        a.href = "myimage/" + configName
+                        a = parent.frames["top_frame"].document.getElementById("myimagemgmtHref");
+                        a.href = "myimagemgmt/" + configName
+
 		    // for VMImage
 		    a = parent.frames["top_frame"].document.getElementById("vmimageHref");
 		    a.href = "vmimage/" + configName
@@ -1142,6 +1167,11 @@ func makeSetupConnectionConfigFunc_js() string {
 		    a = parent.frames["top_frame"].document.getElementById("vmspecHref");
 		    a.href = "vmspec/" + configName
 
+		        // for Cluster(PMKS)
+                        a = parent.frames["top_frame"].document.getElementById("clusterHref");
+                        a.href = "cluster/" + configName
+                        a = parent.frames["top_frame"].document.getElementById("clustermgmtHref");
+                        a.href = "clustermgmt/" + configName
                 }
         `
         return strFunc
@@ -1454,8 +1484,8 @@ func Connectionconfig(c echo.Context) error {
 		nameList := cloudosList()
                 htmlStr += `
                         <tr bgcolor="#FFFFFF" align="center" height="30">
-                            <td>
-                                    <font size=2>#</font>
+                            <td bgcolor="#FFEFBA">
+                                    <font size=2>&nbsp;create:&nbsp;</font>
                             </td>
                             <td>
                 <!-- <input style="font-size:12px;text-align:center;" type="text" name="text_box" id="1" value="AWS"> -->
@@ -1528,10 +1558,10 @@ func SpiderInfo(c echo.Context) error {
                                             <font size=2>$$STARTTIME$$</font>
                                     </td>
                                     <td width="220">
-                                            <font size=2>CB-Spider v0.6.0 (Cafe Latte)</font>
+                                            <font size=2>CB-Spider v0.7.0 (Cortado)</font>
                                     </td>
                                     <td width="220">
-                                            <font size=2>REST API v0.6.0 (Cafe Latte)</font>
+                                            <font size=2>REST API v0.7.0 (Cortado)</font>
                                     </td>
                                 </tr>
 

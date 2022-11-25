@@ -11,6 +11,7 @@
 package connect
 
 import (
+	"errors"
 	cblog "github.com/cloud-barista/cb-log"
 	"github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/drivers/cloudit/client"
 	cirs "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/drivers/cloudit/resources"
@@ -91,3 +92,25 @@ func (ClouditCloudConnection) IsConnected() (bool, error) {
 func (ClouditCloudConnection) Close() error {
 	return nil
 }
+
+func (cloudConn *ClouditCloudConnection) CreateDiskHandler() (irs.DiskHandler, error) {
+	cblogger.Info("Cloudit Cloud Driver: called CreateDiskHandler()!")
+	diskHandler := cirs.ClouditDiskHandler{CredentialInfo: cloudConn.CredentialInfo, Client: &cloudConn.Client}
+	return &diskHandler, nil
+}
+
+func (cloudConn *ClouditCloudConnection) CreateClusterHandler() (irs.ClusterHandler, error) {
+	return nil, errors.New("Cloudit Driver: not implemented")
+}
+
+func (cloudConn *ClouditCloudConnection) CreateMyImageHandler() (irs.MyImageHandler, error) {
+	cblogger.Info("Cloudit Cloud Driver: called CreateMyImageHandler()!")
+	myImageHandler := cirs.ClouditMyImageHandler{CredentialInfo: cloudConn.CredentialInfo, Client: &cloudConn.Client}
+	return &myImageHandler, nil
+}
+
+
+func (cloudConn *ClouditCloudConnection) CreateAnyCallHandler() (irs.AnyCallHandler, error) {
+	return nil, errors.New("Cloudit Driver: not implemented")
+}
+

@@ -10,7 +10,7 @@ sudo hostnamectl set-hostname ${HOSTNAME}
 
 if [[ "${K8S_VERSION}" == "1.23"* ]]; then 
 
-sudo swapoff -a && sed -i '/swap/s/^/#/' /etc/fstab
+sudo swapoff -a && sudo sed -i '/swap/s/^/#/' /etc/fstab
 # br_netfilter
 sudo cat <<EOF | sudo tee /etc/modules-load.d/k8s.conf
 br_netfilter
@@ -70,7 +70,7 @@ sudo apt-get install -y apt-transport-https ca-certificates curl software-proper
 sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
 sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
 sudo apt-get update
-sudo apt-get install -y containerd.io=1.2.13-2 docker-ce=5:19.03.11~3-0~ubuntu-$(lsb_release -cs) docker-ce-cli=5:19.03.11~3-0~ubuntu-$(lsb_release -cs)
+sudo apt-get install -y docker-ce=5:19.03.11~3-0~ubuntu-$(lsb_release -cs) docker-ce-cli=5:19.03.11~3-0~ubuntu-$(lsb_release -cs)
 
 
 sudo bash -c 'cat > /etc/docker/daemon.json <<EOF
@@ -84,7 +84,7 @@ sudo bash -c 'cat > /etc/docker/daemon.json <<EOF
 }
 EOF'
 
-sudo swapoff -a && sed -i '/swap/s/^/#/' /etc/fstab
+sudo swapoff -a && sudo sed -i '/swap/s/^/#/' /etc/fstab
 
 sudo mkdir -p /etc/systemd/system/docker.service.d
 sudo systemctl daemon-reload
@@ -98,6 +98,7 @@ fi
 # kubeadm , kubelet, kubectl
 sudo apt-get install -y kubeadm=${K8S_VERSION} kubelet=${K8S_VERSION} kubectl=${K8S_VERSION}
 sudo apt-mark hold kubeadm kubelet kubectl
+sudo apt-get -y install nfs-common cifs-utils
 
 if [ "${CSP}" != "openstack" ]; then 
 	PUBLIC_IP='$(dig +short myip.opendns.com @resolver1.opendns.com)'
@@ -119,7 +120,7 @@ if [ -f "/etc/kubernetes/kubelet.conf" ]; then
   kubectl --kubeconfig=/etc/kubernetes/kubelet.conf annotate node {{HOSTNAME}} kilo.squat.ai/force-endpoint=${PUBLIC_IP}:51820 --overwrite
 fi
 exit 0
-fi' | sed "s/{{HOSTNAME}}/${HOSTNAME}/g" | sed "s/{{PUBLIC_IP}}/${PUBLIC_IP}/g" | sudo tee /lib/systemd/system/mcks-bootstrap > /dev/null
+fi' | sudo sed "s/{{HOSTNAME}}/${HOSTNAME}/g" | sudo sed "s/{{PUBLIC_IP}}/${PUBLIC_IP}/g" | sudo tee /lib/systemd/system/mcks-bootstrap > /dev/null
 sudo chmod +x /lib/systemd/system/mcks-bootstrap
 fi
 
@@ -147,7 +148,7 @@ if [ -f "/etc/kubernetes/kubelet.conf" ]; then
   fi
 fi
 exit 0
-fi' | sed "s/{{HOSTNAME}}/${HOSTNAME}/g" | sed "s/{{PUBLIC_IP}}/${PUBLIC_IP}/g" | sudo tee /lib/systemd/system/mcks-bootstrap > /dev/null
+fi' | sudo sed "s/{{HOSTNAME}}/${HOSTNAME}/g" | sudo sed "s/{{PUBLIC_IP}}/${PUBLIC_IP}/g" | sudo tee /lib/systemd/system/mcks-bootstrap > /dev/null
 sudo chmod +x /lib/systemd/system/mcks-bootstrap
 fi
 

@@ -22,6 +22,9 @@
     networkCni: "",
     label: "",
     installMonAgent: "",
+    loadbalancer: "",
+    etcd:"",
+    k8sVersion: "",
     description: "",
     createdTime: "",
     nodes: [
@@ -72,9 +75,12 @@
 |cpLeader           |control plane leader 노드명   |string |                                     |
 |networkCni         |network CNI 정보             |string |                                     |
 |label              |label                       |string |                                     |
+|loadbalancer       |loadbalancer                |string |                                     |
+|etcd               |etcd                        |string |                                     |
 |installMonAgent    |모니터링 에이전트 설치 여부        |string | yes/no (no가 아니면 설치)              |
 |description        |description                 |string |                                     |
 |createdTime        |생성일자                      |string |                                     |
+|k8sVersion         |쿠버네티스버전                  |string |                                     |
 
 ### ClusterPhase
 > 프로비저닝 단계
@@ -100,6 +106,8 @@
 * CreateVmSpecFailedReason : VM 타입 생성 실패
 * SetupBoostrapFailedReason : OS 기본 패키지 설치 실패
 * SetupHaproxyFailedReason : HAProxy 설치 실패
+* CreateNLBFailedReason : NLB 생성 실패
+* InitExternalEtcdFailedReason : External Etcd 설치 실패
 * InitControlPlaneFailedReason : ControlPlane Init. 실패
 * SetupNetworkCNIFailedReason : Network CNI 설치 실패
 * JoinControlPlaneFailedReason : ControlPlane join 실패

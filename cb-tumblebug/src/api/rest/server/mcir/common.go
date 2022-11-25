@@ -140,6 +140,13 @@ func RestGetAllResources(c echo.Context) error {
 
 			content.Image = resourceList.([]mcir.TbImageInfo) // type assertion (interface{} -> array)
 			return c.JSON(http.StatusOK, &content)
+		case common.StrCustomImage:
+			var content struct {
+				Image []mcir.TbCustomImageInfo `json:"customImage"`
+			}
+
+			content.Image = resourceList.([]mcir.TbCustomImageInfo) // type assertion (interface{} -> array)
+			return c.JSON(http.StatusOK, &content)
 		case common.StrSecurityGroup:
 			var content struct {
 				SecurityGroup []mcir.TbSecurityGroupInfo `json:"securityGroup"`
@@ -167,6 +174,13 @@ func RestGetAllResources(c echo.Context) error {
 			}
 
 			content.VNet = resourceList.([]mcir.TbVNetInfo) // type assertion (interface{} -> array)
+			return c.JSON(http.StatusOK, &content)
+		case common.StrDataDisk:
+			var content struct {
+				DataDisk []mcir.TbDataDiskInfo `json:"dataDisk"`
+			}
+
+			content.DataDisk = resourceList.([]mcir.TbDataDiskInfo) // type assertion (interface{} -> array)
 			return c.JSON(http.StatusOK, &content)
 		default:
 			return c.JSON(http.StatusBadRequest, nil)

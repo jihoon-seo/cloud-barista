@@ -196,24 +196,6 @@ var doc = `{
                         "required": true
                     },
                     {
-                        "enum": [
-                            "1.18",
-                            "1.23"
-                        ],
-                        "type": "string",
-                        "description": "string enums",
-                        "name": "minorversion",
-                        "in": "query",
-                        "required": true
-                    },
-                    {
-                        "type": "integer",
-                        "description": "Patch version",
-                        "name": "patchversion",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
                         "description": "Request Body to create cluster",
                         "name": "ClusterReq",
                         "in": "body",
@@ -573,6 +555,22 @@ var doc = `{
         "app.ClusterConfigKubernetesReq": {
             "type": "object",
             "properties": {
+                "etcd": {
+                    "type": "string",
+                    "enum": [
+                        "local",
+                        "external"
+                    ],
+                    "example": "local"
+                },
+                "loadbalancer": {
+                    "type": "string",
+                    "enum": [
+                        "haproxy",
+                        "nlb"
+                    ],
+                    "example": "haproxy"
+                },
                 "networkCni": {
                     "type": "string",
                     "enum": [
@@ -592,12 +590,28 @@ var doc = `{
                 "serviceDnsDomain": {
                     "type": "string",
                     "example": "cluster.local"
+                },
+                "storageclass": {
+                    "type": "object",
+                    "properties": {
+                        "nfs": {
+                            "$ref": "#/definitions/app.ClusterStorageClassNfsReq"
+                        }
+                    }
+                },
+                "version": {
+                    "type": "string",
+                    "example": "1.23.13"
                 }
             }
         },
         "app.ClusterConfigReq": {
             "type": "object",
             "properties": {
+                "installMonAgent": {
+                    "type": "string",
+                    "example": "no"
+                },
                 "kubernetes": {
                     "$ref": "#/definitions/app.ClusterConfigKubernetesReq"
                 }
@@ -618,11 +632,6 @@ var doc = `{
                 "description": {
                     "type": "string"
                 },
-                "installMonAgent": {
-                    "type": "string",
-                    "default": "yes",
-                    "example": "no"
-                },
                 "label": {
                     "type": "string"
                 },
@@ -635,6 +644,19 @@ var doc = `{
                     "items": {
                         "$ref": "#/definitions/app.NodeSetReq"
                     }
+                }
+            }
+        },
+        "app.ClusterStorageClassNfsReq": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "example": "/nfs/data"
+                },
+                "server": {
+                    "type": "string",
+                    "example": "163.154.154.89"
                 }
             }
         },
@@ -666,6 +688,19 @@ var doc = `{
                     "type": "integer",
                     "example": 3
                 },
+                "rootDisk": {
+                    "type": "object",
+                    "properties": {
+                        "size": {
+                            "type": "string",
+                            "example": "default"
+                        },
+                        "type": {
+                            "type": "string",
+                            "example": "default"
+                        }
+                    }
+                },
                 "spec": {
                     "type": "string",
                     "example": "t2.medium"
@@ -693,6 +728,9 @@ var doc = `{
                 "clusterConfig": {
                     "type": "string"
                 },
+                "cpGroup": {
+                    "type": "string"
+                },
                 "cpLeader": {
                     "type": "string"
                 },
@@ -702,6 +740,15 @@ var doc = `{
                 },
                 "description": {
                     "type": "string"
+                },
+                "etcd": {
+                    "type": "string",
+                    "default": "local",
+                    "enum": [
+                        "local",
+                        "external"
+                    ],
+                    "example": "local"
                 },
                 "installMonAgent": {
                     "type": "string",
@@ -716,6 +763,15 @@ var doc = `{
                 },
                 "label": {
                     "type": "string"
+                },
+                "loadbalancer": {
+                    "type": "string",
+                    "default": "haproxy",
+                    "enum": [
+                        "haproxy",
+                        "nlb"
+                    ],
+                    "example": "haproxy"
                 },
                 "mcis": {
                     "type": "string"

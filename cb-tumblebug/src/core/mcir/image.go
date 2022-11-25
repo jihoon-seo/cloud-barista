@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/go-resty/resty/v2"
 
@@ -210,28 +211,24 @@ func RegisterImageWithInfo(nsId string, content *TbImageInfo) (TbImageInfo, erro
 
 	err := common.CheckString(nsId)
 	if err != nil {
-		temp := TbImageInfo{}
 		common.CBLog.Error(err)
-		return temp, err
+		return TbImageInfo{}, err
 	}
 	err = common.CheckString(content.Name)
 	if err != nil {
-		temp := TbImageInfo{}
 		common.CBLog.Error(err)
-		return temp, err
+		return TbImageInfo{}, err
 	}
 	check, err := CheckResource(nsId, resourceType, content.Name)
 
 	if check {
-		temp := TbImageInfo{}
 		err := fmt.Errorf("The image " + content.Name + " already exists.")
-		return temp, err
+		return TbImageInfo{}, err
 	}
 
 	if err != nil {
-		temp := TbImageInfo{}
 		err := fmt.Errorf("Failed to check the existence of the image " + content.Name + ".")
-		return temp, err
+		return TbImageInfo{}, err
 	}
 
 	content.Namespace = nsId
@@ -245,7 +242,7 @@ func RegisterImageWithInfo(nsId string, content *TbImageInfo) (TbImageInfo, erro
 	err = common.CBStore.Put(Key, string(Val))
 	if err != nil {
 		common.CBLog.Error(err)
-		return *content, err
+		return TbImageInfo{}, err
 	}
 	keyValue, err := common.CBStore.Get(Key)
 	if err != nil {
@@ -377,7 +374,7 @@ func LookupImage(connConfig string, imageId string) (SpiderImageInfo, error) {
 		tempReq := common.SpiderConnectionName{}
 		tempReq.ConnectionName = connConfig
 
-		client := resty.New().SetCloseConnection(true)
+		client := resty.New().SetTimeout(2 * time.Minute).SetCloseConnection(true)
 		client.SetAllowGetMethodPayload(true)
 
 		resp, err := client.R().

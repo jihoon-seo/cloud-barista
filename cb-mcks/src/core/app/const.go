@@ -5,6 +5,8 @@ type ROLE string
 type Kind string
 type NetworkCni string
 type StatusCode int
+type Loadbalancer string
+type Etcd string
 
 const (
 	CSP_AWS       CSP = "aws"
@@ -14,7 +16,10 @@ const (
 	CSP_TENCENT   CSP = "tencent"
 	CSP_OPENSTACK CSP = "openstack"
 	CSP_IBM       CSP = "ibm"
+	CSP_NCPVPC    CSP = "ncpvpc"
+	CSP_NCP       CSP = "ncp"
 	CSP_CLOUDIT   CSP = "cloudit"
+	CSP_NHNCLOUD  CSP = "nhncloud"
 
 	CONTROL_PLANE ROLE = "control-plane"
 	WORKER        ROLE = "worker"
@@ -31,6 +36,12 @@ const (
 
 	NETWORKCNI_KILO  NetworkCni = "kilo"
 	NETWORKCNI_CANAL NetworkCni = "canal"
+
+	LB_HAPROXY Loadbalancer = "haproxy"
+	LB_NLB     Loadbalancer = "nlb"
+
+	ETCD_LOCAL    Etcd = "local"
+	ETCD_EXTERNAL Etcd = "external"
 
 	POD_CIDR       = "10.244.0.0/16"
 	SERVICE_CIDR   = "10.96.0.0/12"
@@ -51,32 +62,47 @@ type Status struct {
 }
 
 type ClusterReq struct {
-	Name            string           `json:"name" example:"cluster-01"`
-	ControlPlane    []NodeSetReq     `json:"controlPlane"`
-	Worker          []NodeSetReq     `json:"worker"`
-	Config          ClusterConfigReq `json:"config"`
-	Label           string           `json:"label"`
-	InstallMonAgent string           `json:"installMonAgent" example:"no" default:"yes"`
-	Description     string           `json:"description"`
+	Name         string           `json:"name" example:"cluster-01"`
+	ControlPlane []*NodeSetReq    `json:"controlPlane"`
+	Worker       []*NodeSetReq    `json:"worker"`
+	Config       ClusterConfigReq `json:"config"`
+	Label        string           `json:"label"`
+	Description  string           `json:"description"`
 }
 
 type NodeReq struct {
-	ControlPlane []NodeSetReq `json:"controlPlane"`
-	Worker       []NodeSetReq `json:"worker"`
+	ControlPlane []*NodeSetReq `json:"controlPlane"`
+	Worker       []*NodeSetReq `json:"worker"`
 }
 
 type NodeSetReq struct {
 	Connection string `json:"connection" example:"config-aws-ap-northeast-2"`
 	Count      int    `json:"count" example:"3"`
 	Spec       string `json:"spec" example:"t2.medium"`
+	RootDisk   struct {
+		Type string `json:"type" example:"default"`
+		Size string `json:"size" example:"default"`
+	} `json:"rootDisk"`
 }
 
 type ClusterConfigReq struct {
-	Kubernetes ClusterConfigKubernetesReq `json:"kubernetes"`
+	InstallMonAgent string                     `json:"installMonAgent" example:"no"`
+	Kubernetes      ClusterConfigKubernetesReq `json:"kubernetes"`
 }
 type ClusterConfigKubernetesReq struct {
-	NetworkCni       NetworkCni `json:"networkCni" example:"kilo" enums:"canal,kilo" default1:"kilo"`
+	Version          string     `json:"version" example:"1.23.13"`
+	NetworkCni       NetworkCni `json:"networkCni" example:"kilo" enums:"canal,kilo"`
 	PodCidr          string     `json:"podCidr" example:"10.244.0.0/16"`
 	ServiceCidr      string     `json:"serviceCidr" example:"10.96.0.0/12"`
 	ServiceDnsDomain string     `json:"serviceDnsDomain" example:"cluster.local"`
+	StorageClass     struct {
+		Nfs ClusterStorageClassNfsReq `json:"nfs"`
+	} `json:"storageclass"`
+	Loadbalancer Loadbalancer `json:"loadbalancer" example:"haproxy" enums:"haproxy,nlb"`
+	Etcd         Etcd         `json:"etcd" example:"local" enums:"local,external"`
+}
+
+type ClusterStorageClassNfsReq struct {
+	Server string `json:"server" example:"163.154.154.89"`
+	Path   string `json:"path" example:"/nfs/data"`
 }

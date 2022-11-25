@@ -12,6 +12,7 @@ package connect
 
 import (
 	"context"
+	"errors"
 
 	cblog "github.com/cloud-barista/cb-log"
 	gcprs "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/drivers/gcp/resources"
@@ -110,3 +111,26 @@ func (GCPCloudConnection) IsConnected() (bool, error) {
 func (GCPCloudConnection) Close() error {
 	return nil
 }
+
+func (cloudConn *GCPCloudConnection) CreateDiskHandler() (irs.DiskHandler, error) {
+	cblogger.Info("GCP Cloud Driver: called CreateDiskHandler()!")
+	diskHandler := gcprs.GCPDiskHandler{Region: cloudConn.Region, Ctx: cloudConn.Ctx, Client: cloudConn.VMClient, Credential: cloudConn.Credential}
+	return &diskHandler, nil
+}
+
+func (cloudConn *GCPCloudConnection) CreateMyImageHandler() (irs.MyImageHandler, error) {
+	cblogger.Info("GCP Cloud Driver: called CreateMyImageHandler()!")
+	myImageHandler := gcprs.GCPMyImageHandler{Region: cloudConn.Region, Ctx: cloudConn.Ctx, Client: cloudConn.VMClient, Credential: cloudConn.Credential}
+	return &myImageHandler, nil
+}
+
+func (cloudConn *GCPCloudConnection) CreateClusterHandler() (irs.ClusterHandler, error) {
+	return nil, errors.New("GCP Driver: not implemented")
+}
+
+
+
+func (cloudConn *GCPCloudConnection) CreateAnyCallHandler() (irs.AnyCallHandler, error) {
+	return nil, errors.New("GCP Driver: not implemented")
+}
+

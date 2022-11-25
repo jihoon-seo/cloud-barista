@@ -143,6 +143,11 @@ func (driver *AwsDriver) ConnectCloud(connectionInfo idrv.ConnectionInfo) (icon.
 		SecurityClient: vmClient,
 		VmSpecClient:   vmClient,
 		NLBClient:      nlbClient,
+		DiskClient:     vmClient,
+		MyImageClient:  vmClient,
+
+		// Connection for AnyCall
+		AnyCallClient:  vmClient,
 	}
 
 	return &iConn, nil // return type: (icon.CloudConnection, error)

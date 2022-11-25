@@ -49,11 +49,17 @@ const (
 	NLBRegionType                      NLBScope                  = "REGION"
 )
 
-//------ NLB Management
+// ------ NLB Management
 func (nlbHandler *AzureNLBHandler) CreateNLB(nlbReqInfo irs.NLBInfo) (createNLB irs.NLBInfo, createError error) {
 	hiscallInfo := GetCallLogScheme(nlbHandler.Region, "NETWORKLOADBALANCE", nlbReqInfo.IId.NameId, "CreateNLB()")
 	start := call.Start()
-
+	err := checkValidationNLB(nlbReqInfo)
+	if err != nil {
+		createError = errors.New(fmt.Sprintf("Failed to Create NLB. err = %s", err.Error()))
+		cblogger.Error(createError)
+		LoggingError(hiscallInfo, createError)
+		return irs.NLBInfo{}, createError
+	}
 	exist, err := nlbHandler.existNLB(nlbReqInfo.IId)
 	if err != nil {
 		createError = errors.New(fmt.Sprintf("Failed to Create NLB. err = %s", err.Error()))
@@ -306,8 +312,8 @@ func (nlbHandler *AzureNLBHandler) DeleteNLB(nlbIID irs.IID) (bool, error) {
 	return deleteResult, nil
 }
 
-//------ Frontend Control
-//------ Backend Control
+// ------ Frontend Control
+// ------ Backend Control
 func (nlbHandler *AzureNLBHandler) ChangeListener(nlbIID irs.IID, listener irs.ListenerInfo) (irs.ListenerInfo, error) {
 	hiscallInfo := GetCallLogScheme(nlbHandler.Region, "NETWORKLOADBALANCE", nlbIID.NameId, "ChangeListener()")
 	start := call.Start()
@@ -618,7 +624,7 @@ func (nlbHandler *AzureNLBHandler) RemoveVMs(nlbIID irs.IID, vmIIDs *[]irs.IID) 
 
 		backendPoolName := *cbOnlyOneBackendPool.Name
 
-		addPrivateIPs := make([]string, len(*vmIIDs))
+		removPrivateIPs := make([]string, len(*vmIIDs))
 		for i, vmIId := range *vmIIDs {
 			vm, err := GetRawVM(vmIId, nlbHandler.Region.ResourceGroup, nlbHandler.VMClient, nlbHandler.Ctx)
 			if err != nil {
@@ -633,7 +639,7 @@ func (nlbHandler *AzureNLBHandler) RemoveVMs(nlbIID irs.IID, vmIIDs *[]irs.IID) 
 				LoggingError(hiscallInfo, removeErr)
 				return false, removeErr
 			}
-			addPrivateIPs[i] = ip
+			removPrivateIPs[i] = ip
 		}
 
 		pool, err := nlbHandler.NLBBackendAddressPoolsClient.Get(nlbHandler.Ctx, nlbHandler.Region.ResourceGroup, nlbIID.NameId, backendPoolName)
@@ -654,7 +660,7 @@ func (nlbHandler *AzureNLBHandler) RemoveVMs(nlbIID irs.IID, vmIIDs *[]irs.IID) 
 		}
 		currentVMPrivateIPs := make([]string, len(currentVMIIds))
 
-		for i, vmIId := range *vmIIDs {
+		for i, vmIId := range currentVMIIds {
 			vm, err := GetRawVM(vmIId, nlbHandler.Region.ResourceGroup, nlbHandler.VMClient, nlbHandler.Ctx)
 			if err != nil {
 				removeErr := errors.New(fmt.Sprintf("Failed to RemoveVMs NLB. err = %s", err.Error()))
@@ -670,7 +676,6 @@ func (nlbHandler *AzureNLBHandler) RemoveVMs(nlbIID irs.IID, vmIIDs *[]irs.IID) 
 				return false, removeErr
 			}
 			currentVMPrivateIPs[i] = ip
-
 		}
 
 		vpcIId, err := nlbHandler.getVPCIIDByLoadBalancerBackendAddresses(*cbOnlyOneBackendPool.LoadBalancerBackendAddresses)
@@ -683,12 +688,12 @@ func (nlbHandler *AzureNLBHandler) RemoveVMs(nlbIID irs.IID, vmIIDs *[]irs.IID) 
 		for _, currentIP := range currentVMPrivateIPs {
 			chk := false
 			addIPSet := ""
-			for _, addIP := range addPrivateIPs {
-				if strings.EqualFold(addIP, currentIP) {
+			for _, removeIP := range removPrivateIPs {
+				if strings.EqualFold(removeIP, currentIP) {
 					chk = true
 					break
 				}
-				addIPSet = addIP
+				addIPSet = currentIP
 			}
 			if !chk {
 				LoadBalancerBackendAddress, err := nlbHandler.getLoadBalancerBackendAddress(backendPoolName, vpcIId.SystemId, addIPSet)
@@ -771,6 +776,13 @@ func (nlbHandler *AzureNLBHandler) GetVMGroupHealthInfo(nlbIID irs.IID) (irs.Hea
 func (nlbHandler *AzureNLBHandler) ChangeHealthCheckerInfo(nlbIID irs.IID, healthChecker irs.HealthCheckerInfo) (irs.HealthCheckerInfo, error) {
 	hiscallInfo := GetCallLogScheme(nlbHandler.Region, "NETWORKLOADBALANCE", nlbIID.NameId, "ChangeHealthCheckerInfo()")
 	start := call.Start()
+	err := checkValidationNLBHealthCheck(healthChecker)
+	if err != nil {
+		changeErr := errors.New(fmt.Sprintf("Failed to ChangeHealthCheckerInfo NLB. err = %s", err.Error()))
+		cblogger.Error(changeErr.Error())
+		LoggingError(hiscallInfo, changeErr)
+		return irs.HealthCheckerInfo{}, changeErr
+	}
 	nlb, err := nlbHandler.getRawNLB(nlbIID)
 	if err != nil {
 		changeErr := errors.New(fmt.Sprintf("Failed to ChangeHealthCheckerInfo NLB. err = %s", err.Error()))
@@ -797,11 +809,14 @@ func (nlbHandler *AzureNLBHandler) ChangeHealthCheckerInfo(nlbIID irs.IID, healt
 			LoggingError(hiscallInfo, changeErr)
 			return irs.HealthCheckerInfo{}, changeErr
 		}
-		if healthChecker.Interval < 5 || healthChecker.Interval > 2147483646 {
-			return irs.HealthCheckerInfo{}, errors.New("invalid HealthCheckerInfo Interval, interval must be between 5 and 2147483646")
+		if healthChecker.Interval < 5 {
+			return irs.HealthCheckerInfo{}, errors.New("invalid HealthCheckerInfo Interval, interval must be greater than 5")
 		}
-		if healthChecker.Threshold < 2 || healthChecker.Threshold > 429496729 {
-			return irs.HealthCheckerInfo{}, errors.New("invalid HealthCheckerInfo Threshold, Threshold must be between 2 and 429496729 ")
+		if healthChecker.Threshold < 1 {
+			return irs.HealthCheckerInfo{}, errors.New("invalid HealthCheckerInfo Threshold, Threshold  must be greater than 1")
+		}
+		if healthChecker.Interval*healthChecker.Threshold > 2147483647 {
+			return irs.HealthCheckerInfo{}, errors.New("invalid HealthCheckerInfo Interval * Threshold must be between 5 and 2147483647 ")
 		}
 		currentProbes[0].Protocol = protocol
 		currentProbes[0].Port = to.Int32Ptr(int32(port))
@@ -1253,7 +1268,7 @@ func (nlbHandler *AzureNLBHandler) getLoadBalancingRuleInfoByNLB(nlb network.Loa
 	for _, probe := range Probes {
 		if *probe.ID == probeId {
 			// Azure not support
-			healthCheckerInfo.Timeout = 0
+			healthCheckerInfo.Timeout = -1
 			healthCheckerInfo.Threshold = int(*probe.NumberOfProbes)
 			healthCheckerInfo.Interval = int(*probe.IntervalInSeconds)
 			healthCheckerInfo.Port = strconv.Itoa(int(*probe.Port))
@@ -1357,11 +1372,15 @@ func getAzureProbeByCBHealthChecker(healthChecker irs.HealthCheckerInfo) (networ
 	if err != nil {
 		return network.Probe{}, errors.New("invalid HealthCheckerInfo Protocol")
 	}
-	if healthChecker.Interval < 5 || healthChecker.Interval > 2147483646 {
-		return network.Probe{}, errors.New("invalid HealthCheckerInfo Interval, interval must be between 5 and 2147483646")
+
+	if healthChecker.Interval < 5 {
+		return network.Probe{}, errors.New("invalid HealthCheckerInfo Interval, interval must be greater than 5")
 	}
-	if healthChecker.Threshold < 2 || healthChecker.Threshold > 429496729 {
-		return network.Probe{}, errors.New("invalid HealthCheckerInfo Threshold, Threshold must be between 2 and 429496729 ")
+	if healthChecker.Threshold < 1 {
+		return network.Probe{}, errors.New("invalid HealthCheckerInfo Threshold, Threshold  must be greater than 1")
+	}
+	if healthChecker.Interval*healthChecker.Threshold > 2147483647 {
+		return network.Probe{}, errors.New("invalid HealthCheckerInfo Interval * Threshold must be between 5 and 2147483647 ")
 	}
 	probe := network.Probe{
 		Name: to.StringPtr(generateRandName(ProbeNamePrefix)),
@@ -1521,4 +1540,26 @@ func convertListenerInfoProtocolsToInboundRuleProtocol(protocol string) (network
 		return network.TransportProtocolUDP, nil
 	}
 	return "", errors.New("invalid Protocols")
+}
+
+func checkValidationNLB(nlbReqInfo irs.NLBInfo) error {
+	err := checkValidationNLBHealthCheck(nlbReqInfo.HealthChecker)
+	return err
+}
+
+func checkValidationNLBHealthCheck(healthCheckerInfo irs.HealthCheckerInfo) error {
+	// Not -1
+	if healthCheckerInfo.Timeout != -1 {
+		return errors.New(fmt.Sprintf("Azure NLB does not support timeout."))
+	}
+	if healthCheckerInfo.Interval < 5 {
+		return errors.New("invalid HealthCheckerInfo Interval, interval must be greater than 5")
+	}
+	if healthCheckerInfo.Threshold < 1 {
+		return errors.New("invalid HealthCheckerInfo Threshold, Threshold  must be greater than 1")
+	}
+	if healthCheckerInfo.Interval*healthCheckerInfo.Threshold > 2147483647 {
+		return errors.New("invalid HealthCheckerInfo Interval * Threshold must be between 5 and 2147483647 ")
+	}
+	return nil
 }

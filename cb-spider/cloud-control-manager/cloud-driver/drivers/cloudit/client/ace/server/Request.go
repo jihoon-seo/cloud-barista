@@ -3,7 +3,9 @@ package server
 import (
 	cblog "github.com/cloud-barista/cb-log"
 	"github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/drivers/cloudit/client"
+	"github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/drivers/cloudit/client/ace/disk"
 	"github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/drivers/cloudit/client/iam/securitygroup"
+	irs "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/interfaces/resources"
 	"github.com/sirupsen/logrus"
 )
 
@@ -18,16 +20,23 @@ type SecGroupInfo struct {
 	Id string `json:"id" required:"true"`
 }
 
+type VmTagInfo struct {
+	MyImageIID *irs.IID `json:"MyImageIID,omitempty"`
+	Keypair    string
+}
+
 type VMReqInfo struct {
-	TemplateId   string         `json:"templateId" required:"true"`
+	TemplateId   string         `json:"templateId,omitempty"`
+	SnapshotId   string         `json:"snapshotId,omitempty"`
 	SpecId       string         `json:"specId" required:"true"`
 	Name         string         `json:"name" required:"true"`
 	HostName     string         `json:"hostName" required:"true"`
 	RootPassword string         `json:"rootPassword" required:"true"`
 	SubnetAddr   string         `json:"subnetAddr" required:"true"`
 	Secgroups    []SecGroupInfo `json:"secgroups" required:"true"`
-	Description  string            `json:"description" required:"false"`
+	Description  string         `json:"description" required:"false"`
 	Protection   int            `json:"protection" required:"false"`
+	ClusterId    string         `json:"clusterId,omitempty"`
 }
 
 type ServerInfo struct {
@@ -158,7 +167,7 @@ func Start(restClient *client.RestClient, requestOpts *client.RequestOpts) (*Ser
 	return &server, nil
 }
 
-//shutdown
+// shutdown
 func Suspend(restClient *client.RestClient, id string, requestOpts *client.RequestOpts) error {
 	requestURL := restClient.CreateRequestBaseURL(client.ACE, "servers", id, "shutdown")
 	cblogger.Info(requestURL)
@@ -170,7 +179,7 @@ func Suspend(restClient *client.RestClient, id string, requestOpts *client.Reque
 	return nil
 }
 
-//start
+// start
 func Resume(restClient *client.RestClient, id string, requestOpts *client.RequestOpts) error {
 	requestURL := restClient.CreateRequestBaseURL(client.ACE, "servers", id, "start")
 	cblogger.Info(requestURL)
@@ -182,7 +191,7 @@ func Resume(restClient *client.RestClient, id string, requestOpts *client.Reques
 	return nil
 }
 
-//reboot
+// reboot
 func Reboot(restClient *client.RestClient, id string, requestOpts *client.RequestOpts) error {
 	requestURL := restClient.CreateRequestBaseURL(client.ACE, "servers", id, "reboot")
 	cblogger.Info(requestURL)
@@ -194,7 +203,7 @@ func Reboot(restClient *client.RestClient, id string, requestOpts *client.Reques
 	return nil
 }
 
-//delete
+// delete
 func Terminate(restClient *client.RestClient, id string, requestOpts *client.RequestOpts) error {
 	requestURL := restClient.CreateRequestBaseURL(client.ACE, "servers", id)
 	cblogger.Info(requestURL)
@@ -204,4 +213,60 @@ func Terminate(restClient *client.RestClient, id string, requestOpts *client.Req
 		return result.Err
 	}
 	return nil
+}
+
+func AttachVolume(restClient *client.RestClient, serverId string, requestOpts *client.RequestOpts) error {
+	requestURL := restClient.CreateRequestBaseURL(client.ACE, "servers", serverId, "volumes")
+	cblogger.Info(requestURL)
+
+	var result client.Result
+	if _, result.Err = restClient.Post(requestURL, nil, nil, requestOpts); result.Err != nil {
+		return result.Err
+	}
+	return nil
+}
+
+func DetachVolume(restClient *client.RestClient, serverId string, volumeId string, requestOpts *client.RequestOpts) error {
+	requestURL := restClient.CreateRequestBaseURL(client.ACE, "servers", serverId, "volumes", volumeId)
+	cblogger.Info(requestURL)
+
+	var result client.Result
+	if _, result.Err = restClient.Delete(requestURL, requestOpts); result.Err != nil {
+		return result.Err
+	}
+	return nil
+}
+
+// get VM attached Volumes
+func GetRawVmVolumes(restClient *client.RestClient, id string, requestOpts *client.RequestOpts) (*[]disk.DiskInfo, error) {
+	requestURL := restClient.CreateRequestBaseURL(client.ACE, "servers", id, "volumes")
+	cblogger.Info(requestURL)
+
+	var result client.Result
+	_, result.Err = restClient.Get(requestURL, &result.Body, requestOpts)
+	if result.Err != nil {
+		return nil, result.Err
+	}
+
+	var responseList []struct {
+		VolumeId    string
+		VolumeName  string
+		Dev         string
+		Description string
+	}
+	if err := result.ExtractInto(&responseList); err != nil {
+		return nil, err
+	}
+
+	var volumeList []disk.DiskInfo
+	for _, response := range responseList {
+		volumeList = append(volumeList, disk.DiskInfo{
+			ID:          response.VolumeId,
+			Name:        response.VolumeName,
+			Dev:         response.Dev,
+			Description: response.Description,
+		})
+	}
+
+	return &volumeList, nil
 }

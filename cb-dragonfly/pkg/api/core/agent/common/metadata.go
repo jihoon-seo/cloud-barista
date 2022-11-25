@@ -11,14 +11,6 @@ import (
 	"github.com/cloud-barista/cb-dragonfly/pkg/util"
 )
 
-// AgentType 에이전트 동작 메커니즘 유형 (Push, Pull)
-type AgentType string
-
-const (
-	Push AgentType = "push"
-	Pull AgentType = "pull"
-)
-
 // AgentState 에이전트 설치 상태 (설치, 제거)
 type AgentState string
 
@@ -51,6 +43,13 @@ type AgentInfo struct {
 }
 
 func MakeAgentUUID(info AgentInstallInfo) string {
+	if util.CheckMCK8SType(info.ServiceType) {
+		return fmt.Sprintf("%s_%s_%s", info.NsId, info.ServiceType, info.Mck8sId)
+	}
+	return fmt.Sprintf("%s_%s_%s_%s_%s", info.NsId, info.ServiceType, info.McisId, info.VmId, info.CspType)
+}
+
+func MakeAgentUUIDByInfo(info AgentInfo) string {
 	if util.CheckMCK8SType(info.ServiceType) {
 		return fmt.Sprintf("%s_%s_%s", info.NsId, info.ServiceType, info.Mck8sId)
 	}

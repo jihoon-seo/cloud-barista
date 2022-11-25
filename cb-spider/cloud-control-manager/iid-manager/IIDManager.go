@@ -357,6 +357,10 @@ func New(cloudConnectName string, rsType string, uid string) (string, error) {
 		return uid, nil
 	}
 
+	if cccInfo.ProviderName == "AZURE" && rsType == "nodegroup" {
+		return uid, nil
+	}
+
 	// default length: 9 + 21 => 30 (NCP's ID Length, the shortest)
 	//   ex) AWS maxLen(VMID)=255, #234 + #1 + #20 <== "{UID}-{XID}", {XID} = #20
 	maxLength := 9
@@ -395,13 +399,19 @@ func getIdMaxLength(providerName string, rsType string) int {
 	}
 
 	/*----- ref) cloud-driver-libs/cloudos_meta.yaml
-	  # idmaxlength: VPC / Subnet / SecurityGroup / KeyPair / VM
-	    idmaxlength: 255 / 256 / 255 / 255 / 255
+	  # idmaxlength: VPC / Subnet / SecurityGroup / KeyPair / VM / Disk / NLB / MyImage /Cluster
+	    idmaxlength: 255 / 256 / 255 / 255 / 255 / 255 / 255 / 255 / 255
 	-----*/
 	idx := getIDXNumber(rsType)
 	if idx == -1 {
 		return 0
 	}
+
+	// target CSP's rsType not defined in cloudos_meta.yaml
+	if idx >= len(cloudOSMetaInfo.IdMaxLength)  {
+		return 0
+	}
+
 	strMaxLength := cloudOSMetaInfo.IdMaxLength[idx]
 	maxLength, _ := strconv.Atoi(strMaxLength)
 
@@ -420,6 +430,16 @@ func getIDXNumber(rsType string) int {
 		return 3
 	case "vm": 
 		return 4
+	case "disk": 
+		return 5
+	case "nlb": 
+		return 6
+	case "myimage": 
+		return 7
+	case "cluster": 
+		return 8
+	case "nodegroup": 
+		return 9
 	default: 
 		return -1
 	}

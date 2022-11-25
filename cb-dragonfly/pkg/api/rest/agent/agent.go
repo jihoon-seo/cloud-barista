@@ -2,6 +2,8 @@ package agent
 
 import (
 	"fmt"
+	"github.com/cloud-barista/cb-dragonfly/pkg/config"
+	"github.com/cloud-barista/cb-dragonfly/pkg/types"
 	"github.com/cloud-barista/cb-dragonfly/pkg/util"
 	"github.com/labstack/echo/v4"
 	"io/ioutil"
@@ -50,6 +52,13 @@ func InstallTelegraf(c echo.Context) error {
 				}
 			}
 		}
+		if params.PrivateDomain {
+			if params.IP == nil {
+				return c.JSON(http.StatusBadRequest, rest.SetMessage("empty ip info for private domain k8s cluster"))
+			}
+		} else {
+			params.PrivateDomain = false
+		}
 	} else if util.CheckMCISType(params.ServiceType) {
 		// MCIS 에이전트 form 파라미터 값 체크
 		if !checkEmptyFormParam(params.NsId, params.McisId, params.VmId, params.PublicIp, params.UserName, params.SshKey, params.CspType) {
@@ -63,21 +72,23 @@ func InstallTelegraf(c echo.Context) error {
 	}
 
 	requestInfo := &agentcommon.AgentInstallInfo{
-		NsId:         params.NsId,
-		McisId:       params.McisId,
-		VmId:         params.VmId,
-		PublicIp:     params.PublicIp,
-		UserName:     params.UserName,
-		SshKey:       params.SshKey,
-		CspType:      params.CspType,
-		Port:         params.Port,
-		ServiceType:  params.ServiceType,
-		Mck8sId:      params.Mck8sId,
-		APIServerURL: params.APIServerURL,
-		ServerCA:     params.ServerCA,
-		ClientCA:     params.ClientCA,
-		ClientKey:    params.ClientKey,
-		ClientToken:  params.ClientToken,
+		NsId:          params.NsId,
+		McisId:        params.McisId,
+		VmId:          params.VmId,
+		PublicIp:      params.PublicIp,
+		UserName:      params.UserName,
+		SshKey:        params.SshKey,
+		CspType:       params.CspType,
+		Port:          params.Port,
+		ServiceType:   params.ServiceType,
+		Mck8sId:       params.Mck8sId,
+		APIServerURL:  params.APIServerURL,
+		ServerCA:      params.ServerCA,
+		ClientCA:      params.ClientCA,
+		ClientKey:     params.ClientKey,
+		ClientToken:   params.ClientToken,
+		PrivateDomain: params.PrivateDomain,
+		IP:            params.IP,
 	}
 
 	errCode, err := agent.InstallAgent(*requestInfo)
@@ -87,20 +98,21 @@ func InstallTelegraf(c echo.Context) error {
 	return c.JSON(http.StatusOK, rest.SetMessage("agent installation is finished"))
 }
 
-// TODO: WINDOW Version
+// TODO: WINDOW Version GetWindowInstaller ...
 func GetWindowInstaller(c echo.Context) error {
 	rootPath := os.Getenv("CBMON_ROOT")
 	filePath := rootPath + "/file/pkg/windows/installer/cbinstaller_windows_amd64.zip"
 	return c.File(filePath)
 }
 
-// Telegraf config 파일 다운로드
+// GetTelegrafConfFile (윈도우 전용) Telegraf 설정 파일 다운로드
 func GetTelegrafConfFile(c echo.Context) error {
 	// Query 파라미터 가져오기
 	nsId := c.QueryParam("ns_id")
 	mcisId := c.QueryParam("mcis_id")
 	vmId := c.QueryParam("vm_id")
 	cspType := c.QueryParam("csp_type")
+	serviceType := c.QueryParam("service_type")
 
 	// Query 파라미터 값 체크
 	if nsId == "" || mcisId == "" || vmId == "" || cspType == "" {
@@ -108,7 +120,7 @@ func GetTelegrafConfFile(c echo.Context) error {
 	}
 
 	rootPath := os.Getenv("CBMON_ROOT")
-	filePath := rootPath + "/file/conf/telegraf.conf"
+	filePath := rootPath + "/file/conf/mcis/telegraf.conf"
 
 	read, err := ioutil.ReadFile(filePath)
 	if err != nil {
@@ -117,10 +129,30 @@ func GetTelegrafConfFile(c echo.Context) error {
 
 	// 파일 내의 변수 값 설정 (hostId, collectorServer)
 	strConf := string(read)
+	strConf = strings.ReplaceAll(strConf, `osType = "linux"`, `osType = "windows"`)
 	strConf = strings.ReplaceAll(strConf, "{{ns_id}}", nsId)
 	strConf = strings.ReplaceAll(strConf, "{{mcis_id}}", mcisId)
 	strConf = strings.ReplaceAll(strConf, "{{vm_id}}", vmId)
 	strConf = strings.ReplaceAll(strConf, "{{csp_type}}", cspType)
+	strConf = strings.ReplaceAll(strConf, "{{service_type}}", serviceType)
+
+	strConf = strings.ReplaceAll(strConf, "{{mechanism}}", config.GetInstance().Monitoring.DefaultPolicy)
+	strConf = strings.ReplaceAll(strConf, "{{agent_collect_interval}}", fmt.Sprintf("%ds", config.GetInstance().Monitoring.MCISAgentInterval))
+
+	if strings.EqualFold(config.GetInstance().Monitoring.DeployType, "helm") {
+		strConf = strings.ReplaceAll(strConf, "{{server_port}}", fmt.Sprintf("%d", config.GetInstance().Dragonfly.HelmPort))
+	} else {
+		strConf = strings.ReplaceAll(strConf, "{{server_port}}", fmt.Sprintf("%d", config.GetInstance().Dragonfly.Port))
+	}
+	var kafkaPort int
+	if config.GetInstance().GetMonConfig().DeployType == types.Helm {
+		kafkaPort = config.GetInstance().Kafka.HelmPort
+	} else {
+		kafkaPort = types.KafkaDefaultPort
+	}
+	kafkaAddr := fmt.Sprintf("%s:%d", config.GetInstance().Kafka.EndpointUrl, kafkaPort)
+	strConf = strings.ReplaceAll(strConf, "{{broker_server}}", kafkaAddr)
+	strConf = strings.ReplaceAll(strConf, "{{topic}}", fmt.Sprintf("%s_%s_%s_%s_%s", nsId, serviceType, mcisId, vmId, cspType))
 
 	return c.Blob(http.StatusOK, "text/plain", []byte(strConf))
 }
@@ -196,6 +228,13 @@ func UninstallAgent(c echo.Context) error {
 				}
 			}
 		}
+		if params.PrivateDomain {
+			if params.IP == nil {
+				return c.JSON(http.StatusBadRequest, rest.SetMessage("empty ip info for private domain k8s cluster"))
+			}
+		} else {
+			params.PrivateDomain = false
+		}
 	}
 
 	// MCIS 에이전트 form 파라미터 값 체크
@@ -209,21 +248,23 @@ func UninstallAgent(c echo.Context) error {
 	}
 
 	requestInfo := agentcommon.AgentInstallInfo{
-		NsId:         params.NsId,
-		McisId:       params.McisId,
-		VmId:         params.VmId,
-		PublicIp:     params.PublicIp,
-		UserName:     params.UserName,
-		SshKey:       params.SshKey,
-		CspType:      params.CspType,
-		Port:         params.Port,
-		ServiceType:  params.ServiceType,
-		Mck8sId:      params.Mck8sId,
-		APIServerURL: params.APIServerURL,
-		ServerCA:     params.ServerCA,
-		ClientCA:     params.ClientCA,
-		ClientKey:    params.ClientKey,
-		ClientToken:  params.ClientToken,
+		NsId:          params.NsId,
+		McisId:        params.McisId,
+		VmId:          params.VmId,
+		PublicIp:      params.PublicIp,
+		UserName:      params.UserName,
+		SshKey:        params.SshKey,
+		CspType:       params.CspType,
+		Port:          params.Port,
+		ServiceType:   params.ServiceType,
+		Mck8sId:       params.Mck8sId,
+		APIServerURL:  params.APIServerURL,
+		ServerCA:      params.ServerCA,
+		ClientCA:      params.ClientCA,
+		ClientKey:     params.ClientKey,
+		ClientToken:   params.ClientToken,
+		PrivateDomain: params.PrivateDomain,
+		IP:            params.IP,
 	}
 	errCode, err := agent.UninstallAgent(requestInfo)
 	if errCode != http.StatusOK {

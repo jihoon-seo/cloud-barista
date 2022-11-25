@@ -40,6 +40,7 @@ import (
 	"github.com/cloud-barista/cb-spider/interface/api"
 	"github.com/cloud-barista/cb-tumblebug/src/core/common"
 	"github.com/cloud-barista/cb-tumblebug/src/core/mcir"
+	"github.com/go-resty/resty/v2"
 )
 
 // [MCIS and VM object information managemenet]
@@ -162,8 +163,66 @@ func GetVmListByLabel(nsId string, mcisId string, label string) ([]string, error
 
 }
 
-// ListVmGroupId is func to return list of VmGroups in a given MCIS
-func ListVmGroupId(nsId string, mcisId string) ([]string, error) {
+// ListVmByFilter is func to get list VMs in a MCIS by a filter consist of Key and Value
+func ListVmByFilter(nsId string, mcisId string, filterKey string, filterVal string) ([]string, error) {
+
+	check, err := CheckMcis(nsId, mcisId)
+	if !check {
+		err := fmt.Errorf("Not found the MCIS: " + mcisId + " from the NS: " + nsId)
+		return nil, err
+	}
+
+	vmList, err := ListVmId(nsId, mcisId)
+	if err != nil {
+		common.CBLog.Error(err)
+		return nil, err
+	}
+	if len(vmList) == 0 {
+		return nil, nil
+	}
+	if filterKey == "" {
+		return vmList, nil
+	}
+
+	var groupVmList []string
+
+	for _, v := range vmList {
+		vmObj, vmErr := GetVmObject(nsId, mcisId, v)
+		if vmErr != nil {
+			common.CBLog.Error(err)
+			return nil, vmErr
+		}
+		vmObjReflect := reflect.ValueOf(&vmObj)
+		elements := vmObjReflect.Elem()
+		for i := 0; i < elements.NumField(); i++ {
+			key := elements.Type().Field(i).Name
+			if strings.EqualFold(filterKey, key) {
+				fmt.Println(key)
+
+				val := elements.Field(i).Interface().(string)
+				fmt.Println(val)
+				if strings.EqualFold(filterVal, val) {
+
+					groupVmList = append(groupVmList, vmObj.Id)
+					fmt.Println(groupVmList)
+				}
+
+				break
+			}
+		}
+	}
+	return groupVmList, nil
+}
+
+// ListMcisGroupVms is func to get VM list with a SubGroup label in a specified MCIS
+func ListMcisGroupVms(nsId string, mcisId string, groupId string) ([]string, error) {
+	// SubGroupId is the Key for SubGroupId in TbVmInfo struct
+	filterKey := "SubGroupId"
+	return ListVmByFilter(nsId, mcisId, filterKey, groupId)
+}
+
+// ListSubGroupId is func to return list of SubGroups in a given MCIS
+func ListSubGroupId(nsId string, mcisId string) ([]string, error) {
 
 	err := common.CheckString(nsId)
 	if err != nil {
@@ -177,7 +236,7 @@ func ListVmGroupId(nsId string, mcisId string) ([]string, error) {
 		return nil, err
 	}
 
-	fmt.Println("[ListVmGroupId]")
+	fmt.Println("[ListSubGroupId]")
 	key := common.GenMcisKey(nsId, mcisId, "")
 	key += "/"
 
@@ -186,17 +245,17 @@ func ListVmGroupId(nsId string, mcisId string) ([]string, error) {
 		common.CBLog.Error(err)
 		return nil, err
 	}
-	var vmGroupList []string
+	var subGroupList []string
 	for _, v := range keyValue {
-		if strings.Contains(v.Key, "/vmgroup/") {
-			trimmedString := strings.TrimPrefix(v.Key, (key + "vmgroup/"))
+		if strings.Contains(v.Key, "/subgroup/") {
+			trimmedString := strings.TrimPrefix(v.Key, (key + "subgroup/"))
 			// prevent malformed key (if key for vm id includes '/', the key does not represent VM ID)
 			if !strings.Contains(trimmedString, "/") {
-				vmGroupList = append(vmGroupList, trimmedString)
+				subGroupList = append(subGroupList, trimmedString)
 			}
 		}
 	}
-	return vmGroupList, nil
+	return subGroupList, nil
 }
 
 // GetMcisInfo is func to return MCIS information with the current status update
@@ -263,6 +322,101 @@ func GetMcisInfo(nsId string, mcisId string) (*TbMcisInfo, error) {
 	}
 
 	return &mcisObj, nil
+}
+
+// GetMcisAccessInfo is func to retrieve MCIS Access information
+func GetMcisAccessInfo(nsId string, mcisId string, option string) (*McisAccessInfo, error) {
+
+	output := &McisAccessInfo{}
+	temp := &McisAccessInfo{}
+	err := common.CheckString(nsId)
+	if err != nil {
+		common.CBLog.Error(err)
+		return temp, err
+	}
+
+	err = common.CheckString(mcisId)
+	if err != nil {
+		common.CBLog.Error(err)
+		return temp, err
+	}
+	check, _ := CheckMcis(nsId, mcisId)
+
+	if !check {
+		err := fmt.Errorf("The mcis " + mcisId + " does not exist.")
+		return temp, err
+	}
+
+	output.McisId = mcisId
+
+	mcNlbAccess, err := GetMcNlbAccess(nsId, mcisId)
+	if err == nil {
+		output.McisNlbListener = mcNlbAccess
+	}
+
+	subGroupList, err := ListSubGroupId(nsId, mcisId)
+	if err != nil {
+		common.CBLog.Error(err)
+		return temp, err
+	}
+	// TODO: make in parallel
+
+	for _, groupId := range subGroupList {
+		subGroupAccessInfo := McisSubGroupAccessInfo{}
+		subGroupAccessInfo.SubGroupId = groupId
+		nlb, err := GetNLB(nsId, mcisId, groupId)
+		if err == nil {
+			subGroupAccessInfo.NlbListener = &nlb.Listener
+		}
+		vmList, err := ListMcisGroupVms(nsId, mcisId, groupId)
+		if err != nil {
+			common.CBLog.Error(err)
+			return temp, err
+		}
+		var wg sync.WaitGroup
+		chanResults := make(chan McisVmAccessInfo)
+
+		for _, vmId := range vmList {
+			wg.Add(1)
+			go func(nsId string, mcisId string, vmId string, option string, chanResults chan McisVmAccessInfo) {
+				defer wg.Done()
+				vmInfo, err := GetVmCurrentPublicIp(nsId, mcisId, vmId)
+				vmAccessInfo := McisVmAccessInfo{}
+				if err != nil {
+					common.CBLog.Error(err)
+					vmAccessInfo.PublicIP = ""
+					vmAccessInfo.PrivateIP = ""
+					vmAccessInfo.SSHPort = ""
+				} else {
+					vmAccessInfo.PublicIP = vmInfo.PublicIp
+					vmAccessInfo.PrivateIP = vmInfo.PrivateIp
+					vmAccessInfo.SSHPort = vmInfo.SSHPort
+				}
+				vmAccessInfo.VmId = vmId
+
+				_, verifiedUserName, privateKey := GetVmSshKey(nsId, mcisId, vmId)
+
+				if strings.EqualFold(option, "showSshKey") {
+					vmAccessInfo.PrivateKey = privateKey
+				}
+
+				vmAccessInfo.VmUserAccount = verifiedUserName
+				//vmAccessInfo.VmUserPassword
+				chanResults <- vmAccessInfo
+			}(nsId, mcisId, vmId, option, chanResults)
+		}
+		go func() {
+			wg.Wait()
+			close(chanResults)
+		}()
+		for result := range chanResults {
+			subGroupAccessInfo.McisVmAccessInfo = append(subGroupAccessInfo.McisVmAccessInfo, result)
+		}
+
+		output.McisSubGroupAccessInfo = append(output.McisSubGroupAccessInfo, subGroupAccessInfo)
+	}
+
+	return output, nil
 }
 
 // CoreGetAllMcis is func to get all MCIS objects
@@ -477,6 +631,87 @@ func GetVmObject(nsId string, mcisId string, vmId string) (TbVmInfo, error) {
 	vmTmp := TbVmInfo{}
 	json.Unmarshal([]byte(keyValue.Value), &vmTmp)
 	return vmTmp, nil
+}
+
+// GetVmIdNameInDetail is func to get ID and Name details
+func GetVmIdNameInDetail(nsId string, mcisId string, vmId string) (*TbIdNameInDetailInfo, error) {
+	key := common.GenMcisKey(nsId, mcisId, vmId)
+	keyValue, err := common.CBStore.Get(key)
+	if keyValue == nil || err != nil {
+		common.CBLog.Error(err)
+		return &TbIdNameInDetailInfo{}, err
+	}
+	vmTmp := TbVmInfo{}
+	json.Unmarshal([]byte(keyValue.Value), &vmTmp)
+
+	var idDetails TbIdNameInDetailInfo
+
+	idDetails.IdInTb = vmTmp.Id
+	idDetails.IdInSp = vmTmp.CspViewVmDetail.IId.NameId
+	idDetails.IdInCsp = vmTmp.CspViewVmDetail.IId.SystemId
+	idDetails.NameInCsp = "TBD"
+
+	type spiderReqTmp struct {
+		ConnectionName string `json:"ConnectionName"`
+		ResourceType   string `json:"ResourceType"`
+	}
+	type spiderResTmp struct {
+		Name string `json:"Name"`
+	}
+
+	var tempReq spiderReqTmp
+	tempReq.ConnectionName = vmTmp.ConnectionName
+	tempReq.ResourceType = "vm"
+
+	var tempRes *spiderResTmp
+
+	if os.Getenv("SPIDER_CALL_METHOD") == "REST" {
+
+		client := resty.New().SetCloseConnection(true)
+		client.SetAllowGetMethodPayload(true)
+
+		// fmt.Println("tempReq:")                             // for debug
+		// payload, _ := json.MarshalIndent(tempReq, "", "  ") // for debug
+		fmt.Println(tempReq) // for debug
+
+		req := client.R().
+			SetHeader("Content-Type", "application/json").
+			SetBody(tempReq).
+			SetResult(&spiderResTmp{}) // or SetResult(AuthSuccess{}).
+			//SetError(&AuthError{}).       // or SetError(AuthError{}).
+
+		var resp *resty.Response
+		var err error
+
+		var url string
+		url = fmt.Sprintf("%s/cspresourcename/%s", common.SpiderRestUrl, idDetails.IdInSp)
+		resp, err = req.Get(url)
+
+		if err != nil {
+			common.CBLog.Error(err)
+			err := fmt.Errorf("an error occurred while requesting to CB-Spider")
+			return &TbIdNameInDetailInfo{}, err
+		}
+
+		fmt.Println("HTTP Status code: " + strconv.Itoa(resp.StatusCode()))
+		switch {
+		case resp.StatusCode() >= 400 || resp.StatusCode() < 200:
+			err := fmt.Errorf(string(resp.Body()))
+			common.CBLog.Error(err)
+			return &TbIdNameInDetailInfo{}, err
+		}
+
+		tempRes = resp.Result().(*spiderResTmp)
+		fmt.Println(tempRes)
+
+	} else {
+		err = fmt.Errorf("gRPC for GetVmIdNameInDetail() is not supported")
+		common.CBLog.Error(err)
+		return &TbIdNameInDetailInfo{}, err
+	}
+	idDetails.NameInCsp = tempRes.Name
+
+	return &idDetails, nil
 }
 
 // [MCIS and VM status management]
@@ -770,6 +1005,9 @@ func GetVmCurrentPublicIp(nsId string, mcisId string, vmId string) (TbVmStatusIn
 	type statusResponse struct {
 		Status         string
 		PublicIP       string
+		PublicDNS      string
+		PrivateIP      string
+		PrivateDNS     string
 		SSHAccessPoint string
 	}
 	var statusResponseTmp statusResponse
@@ -858,6 +1096,7 @@ func GetVmCurrentPublicIp(nsId string, mcisId string, vmId string) (TbVmStatusIn
 
 	vmStatusTmp := TbVmStatusInfo{}
 	vmStatusTmp.PublicIp = statusResponseTmp.PublicIP
+	vmStatusTmp.PrivateIp = statusResponseTmp.PrivateIP
 	vmStatusTmp.SSHPort, _ = TrimIP(statusResponseTmp.SSHAccessPoint)
 
 	return vmStatusTmp, nil
@@ -1325,29 +1564,273 @@ func UpdateVmInfo(nsId string, mcisId string, vmInfoData TbVmInfo) {
 	}
 }
 
+// type DataDiskCmd string
+const (
+	AttachDataDisk    string = "attach"
+	DetachDataDisk    string = "detach"
+	AvailableDataDisk string = "available"
+)
+
+// AttachDetachDataDisk is func to attach/detach DataDisk to/from VM
+func AttachDetachDataDisk(nsId string, mcisId string, vmId string, command string, dataDiskId string) (TbVmInfo, error) {
+	vmKey := common.GenMcisKey(nsId, mcisId, vmId)
+
+	// Check existence of the key. If no key, no update.
+	keyValue, err := common.CBStore.Get(vmKey)
+	if keyValue == nil || err != nil {
+		err := fmt.Errorf("Failed to find 'ns/mcis/vm': %s/%s/%s \n", nsId, mcisId, vmId)
+		common.CBLog.Error(err)
+		return TbVmInfo{}, err
+	}
+
+	vm := TbVmInfo{}
+	json.Unmarshal([]byte(keyValue.Value), &vm)
+
+	isDataDiskAttached := common.CheckElement(dataDiskId, vm.DataDiskIds)
+	if command == DetachDataDisk && isDataDiskAttached == false {
+		err := fmt.Errorf("Failed to find the dataDisk %s in the attached dataDisk list.", dataDiskId)
+		common.CBLog.Error(err)
+		return TbVmInfo{}, err
+	} else if command == AttachDataDisk && isDataDiskAttached == true {
+		err := fmt.Errorf("The dataDisk %s is already in the attached dataDisk list.", dataDiskId)
+		common.CBLog.Error(err)
+		return TbVmInfo{}, err
+	}
+
+	dataDiskKey := common.GenResourceKey(nsId, common.StrDataDisk, dataDiskId)
+
+	// Check existence of the key. If no key, no update.
+	keyValue, err = common.CBStore.Get(dataDiskKey)
+	if keyValue == nil || err != nil {
+		return TbVmInfo{}, err
+	}
+
+	dataDisk := mcir.TbDataDiskInfo{}
+	json.Unmarshal([]byte(keyValue.Value), &dataDisk)
+
+	tempReq := mcir.SpiderDiskAttachDetachReqWrapper{
+		ConnectionName: vm.ConnectionName,
+		ReqInfo: mcir.SpiderDiskAttachDetachReq{
+			VMName: vm.CspViewVmDetail.IId.NameId,
+		},
+	}
+
+	client := resty.New().SetCloseConnection(true)
+	client.SetAllowGetMethodPayload(true)
+
+	req := client.R().
+		SetHeader("Content-Type", "application/json").
+		SetBody(tempReq)
+		// SetResult(&SpiderDiskInfo{}) // or SetResult(AuthSuccess{}).
+		//SetError(&AuthError{}).       // or SetError(AuthError{}).
+
+	var url string
+	var cmdToUpdateAsso string
+	var resp *resty.Response
+
+	switch command {
+	case AttachDataDisk:
+		req = req.SetResult(&mcir.SpiderDiskInfo{})
+		url = fmt.Sprintf("%s/disk/%s/attach", common.SpiderRestUrl, dataDisk.CspDataDiskName)
+
+		cmdToUpdateAsso = common.StrAdd
+
+	case DetachDataDisk:
+		// req = req.SetResult(&bool)
+		url = fmt.Sprintf("%s/disk/%s/detach", common.SpiderRestUrl, dataDisk.CspDataDiskName)
+
+		cmdToUpdateAsso = common.StrDelete
+
+	default:
+
+	}
+
+	resp, err = req.Put(url)
+
+	fmt.Printf("HTTP Status code: %d \n", resp.StatusCode())
+	switch {
+	case resp.StatusCode() >= 400 || resp.StatusCode() < 200:
+		err := fmt.Errorf(string(resp.Body()))
+		fmt.Println("body: ", string(resp.Body()))
+		common.CBLog.Error(err)
+		return TbVmInfo{}, err
+	}
+
+	switch command {
+	case AttachDataDisk:
+		vm.DataDiskIds = append(vm.DataDiskIds, dataDiskId)
+		// mcir.UpdateAssociatedObjectList(nsId, common.StrDataDisk, dataDiskId, common.StrAdd, vmKey)
+	case DetachDataDisk:
+		oldDataDiskIds := vm.DataDiskIds
+		newDataDiskIds := oldDataDiskIds
+
+		found_flag := false
+
+		for i, oldDataDisk := range oldDataDiskIds {
+			if oldDataDisk == dataDiskId {
+				found_flag = true
+				newDataDiskIds = append(oldDataDiskIds[:i], oldDataDiskIds[i+1:]...)
+				break
+			}
+		}
+
+		// Actually, in here, 'found_flag' cannot be false,
+		// since isDataDiskAttached is confirmed to be 'true' in the beginning of this function.
+		// Below is just a code snippet of 'defensive programming'.
+		if found_flag == false {
+			err := fmt.Errorf("Failed to find the dataDisk %s in the attached dataDisk list.", dataDiskId)
+			common.CBLog.Error(err)
+			return TbVmInfo{}, err
+		} else {
+			vm.DataDiskIds = newDataDiskIds
+		}
+	}
+
+	// Update 'cspViewVmDetail' field
+	url = fmt.Sprintf("%s/vm/%s", common.SpiderRestUrl, vm.CspViewVmDetail.IId.NameId)
+
+	connectionName := common.SpiderConnectionName{
+		ConnectionName: vm.ConnectionName,
+	}
+
+	req = client.R().
+		SetHeader("Content-Type", "application/json").
+		SetBody(connectionName).
+		SetResult(&SpiderVMInfo{}) // or SetResult(AuthSuccess{}).
+		//SetError(&AuthError{}).       // or SetError(AuthError{}).
+
+	time.Sleep(8 * time.Second)
+	resp, err = req.Get(url)
+
+	fmt.Printf("HTTP Status code: %d \n", resp.StatusCode())
+	switch {
+	case resp.StatusCode() >= 400 || resp.StatusCode() < 200:
+		err := fmt.Errorf(string(resp.Body()))
+		fmt.Println("body: ", string(resp.Body()))
+		common.CBLog.Error(err)
+		return vm, err
+	}
+
+	updatedSpiderVM := resp.Result().(*SpiderVMInfo)
+	// fmt.Printf("in AttachDetachDataDisk(), updatedSpiderVM.DataDiskIIDs: %s", updatedSpiderVM.DataDiskIIDs) // for debug
+	vm.CspViewVmDetail = *updatedSpiderVM
+
+	UpdateVmInfo(nsId, mcisId, vm)
+
+	// Update TB DataDisk object's 'associatedObjects' field
+	mcir.UpdateAssociatedObjectList(nsId, common.StrDataDisk, dataDiskId, cmdToUpdateAsso, vmKey)
+
+	// Update TB DataDisk object's 'status' field
+	// Just calling GetResource(dataDisk) once will update TB DataDisk object's 'status' field
+	mcir.GetResource(nsId, common.StrDataDisk, dataDiskId)
+	/*
+		url = fmt.Sprintf("%s/disk/%s", common.SpiderRestUrl, dataDisk.CspDataDiskName)
+
+		req = client.R().
+			SetHeader("Content-Type", "application/json").
+			SetBody(connectionName).
+			SetResult(&mcir.SpiderDiskInfo{}) // or SetResult(AuthSuccess{}).
+			//SetError(&AuthError{}).       // or SetError(AuthError{}).
+
+		resp, err = req.Get(url)
+
+		fmt.Printf("HTTP Status code: %d \n", resp.StatusCode())
+		switch {
+		case resp.StatusCode() >= 400 || resp.StatusCode() < 200:
+			err := fmt.Errorf(string(resp.Body()))
+			fmt.Println("body: ", string(resp.Body()))
+			common.CBLog.Error(err)
+			return vm, err
+		}
+
+		updatedSpiderDisk := resp.Result().(*mcir.SpiderDiskInfo)
+		dataDisk.Status = updatedSpiderDisk.Status
+		fmt.Printf("dataDisk.Status: %s \n", dataDisk.Status) // for debug
+		mcir.UpdateResourceObject(nsId, common.StrDataDisk, dataDisk)
+	*/
+
+	return vm, nil
+}
+
+func GetAvailableDataDisks(nsId string, mcisId string, vmId string, option string) (interface{}, error) {
+	vmKey := common.GenMcisKey(nsId, mcisId, vmId)
+
+	// Check existence of the key. If no key, no update.
+	keyValue, err := common.CBStore.Get(vmKey)
+	if keyValue == nil || err != nil {
+		err := fmt.Errorf("Failed to find 'ns/mcis/vm': %s/%s/%s \n", nsId, mcisId, vmId)
+		common.CBLog.Error(err)
+		return nil, err
+	}
+
+	vm := TbVmInfo{}
+	json.Unmarshal([]byte(keyValue.Value), &vm)
+
+	tbDataDisksInterface, err := mcir.ListResource(nsId, common.StrDataDisk, "", "")
+	if err != nil {
+		err := fmt.Errorf("Failed to get dataDisk List. \n")
+		common.CBLog.Error(err)
+		return nil, err
+	}
+
+	jsonString, err := json.Marshal(tbDataDisksInterface)
+	if err != nil {
+		err := fmt.Errorf("Failed to marshal dataDisk list into JSON string. \n")
+		common.CBLog.Error(err)
+		return nil, err
+	}
+
+	tbDataDisks := []mcir.TbDataDiskInfo{}
+	json.Unmarshal(jsonString, &tbDataDisks)
+
+	if option != "id" {
+		return tbDataDisks, nil
+	} else { // option == "id"
+		idList := []string{}
+
+		for _, v := range tbDataDisks {
+			// Update Tb dataDisk object's status
+			newObj, err := mcir.GetResource(nsId, common.StrDataDisk, v.Id)
+			if err != nil {
+				common.CBLog.Error(err)
+				return nil, err
+			}
+			tempObj := newObj.(mcir.TbDataDiskInfo)
+
+			if v.ConnectionName == vm.ConnectionName && tempObj.Status == "Available" {
+				idList = append(idList, v.Id)
+			}
+		}
+
+		return idList, nil
+	}
+}
+
 // [Delete MCIS and VM object]
 
 // DelMcis is func to delete MCIS object
-func DelMcis(nsId string, mcisId string, option string) error {
+func DelMcis(nsId string, mcisId string, option string) (common.IdList, error) {
 
 	option = common.ToLower(option)
+	deletedResources := common.IdList{}
+	deleteStatus := " [Done]"
 
 	err := common.CheckString(nsId)
 	if err != nil {
 		common.CBLog.Error(err)
-		return err
+		return deletedResources, err
 	}
 
 	err = common.CheckString(mcisId)
 	if err != nil {
 		common.CBLog.Error(err)
-		return err
+		return deletedResources, err
 	}
 	check, _ := CheckMcis(nsId, mcisId)
 
 	if !check {
 		err := fmt.Errorf("The mcis " + mcisId + " does not exist.")
-		return err
+		return deletedResources, err
 	}
 
 	fmt.Println("[Delete MCIS] " + mcisId)
@@ -1358,7 +1841,7 @@ func DelMcis(nsId string, mcisId string, option string) error {
 		err := fmt.Errorf("MCIS " + mcisId + " status nil, Deletion is not allowed (use option=force for force deletion)")
 		common.CBLog.Error(err)
 		if option != "force" {
-			return err
+			return deletedResources, err
 		}
 	}
 
@@ -1371,14 +1854,14 @@ func DelMcis(nsId string, mcisId string, option string) error {
 			_, err := HandleMcisAction(nsId, mcisId, ActionRefine, true)
 			if err != nil {
 				common.CBLog.Error(err)
-				return err
+				return deletedResources, err
 			}
 
 			// ActionTerminate
 			_, err = HandleMcisAction(nsId, mcisId, ActionTerminate, true)
 			if err != nil {
 				common.CBLog.Error(err)
-				return err
+				return deletedResources, err
 			}
 			// for deletion, need to wait until termination is finished
 			// Sleep for 5 seconds
@@ -1394,17 +1877,24 @@ func DelMcis(nsId string, mcisId string, option string) error {
 		err := fmt.Errorf("MCIS " + mcisId + " is " + mcisStatus.Status + " and not " + StatusTerminated + "/" + StatusUndefined + "/" + StatusFailed + ", Deletion is not allowed (use option=force for force deletion)")
 		common.CBLog.Error(err)
 		if option != "force" {
-			return err
+			return deletedResources, err
 		}
 	}
 
 	key := common.GenMcisKey(nsId, mcisId, "")
 	fmt.Println(key)
 
+	// delete associated MCIS Policy
+	err = DelMcisPolicy(nsId, mcisId)
+	if err == nil {
+		common.CBLog.Error(err)
+		deletedResources.IdList = append(deletedResources.IdList, "Policy: "+mcisId+deleteStatus)
+	}
+
 	vmList, err := ListVmId(nsId, mcisId)
 	if err != nil {
 		common.CBLog.Error(err)
-		return err
+		return deletedResources, err
 	}
 
 	// delete vms info
@@ -1416,16 +1906,20 @@ func DelMcis(nsId string, mcisId string, option string) error {
 		vmInfo, err := GetVmObject(nsId, mcisId, v)
 		if err != nil {
 			common.CBLog.Error(err)
-			return err
+			return deletedResources, err
 		}
 
 		err = common.CBStore.Delete(vmKey)
 		if err != nil {
 			common.CBLog.Error(err)
-			return err
+			return deletedResources, err
 		}
 
-		mcir.UpdateAssociatedObjectList(nsId, common.StrImage, vmInfo.ImageId, common.StrDelete, vmKey)
+		_, err = mcir.UpdateAssociatedObjectList(nsId, common.StrImage, vmInfo.ImageId, common.StrDelete, vmKey)
+		if err != nil {
+			mcir.UpdateAssociatedObjectList(nsId, common.StrCustomImage, vmInfo.ImageId, common.StrDelete, vmKey)
+		}
+
 		mcir.UpdateAssociatedObjectList(nsId, common.StrSpec, vmInfo.SpecId, common.StrDelete, vmKey)
 		mcir.UpdateAssociatedObjectList(nsId, common.StrSSHKey, vmInfo.SshKeyId, common.StrDelete, vmKey)
 		mcir.UpdateAssociatedObjectList(nsId, common.StrVNet, vmInfo.VNetId, common.StrDelete, vmKey)
@@ -1433,32 +1927,63 @@ func DelMcis(nsId string, mcisId string, option string) error {
 		for _, v2 := range vmInfo.SecurityGroupIds {
 			mcir.UpdateAssociatedObjectList(nsId, common.StrSecurityGroup, v2, common.StrDelete, vmKey)
 		}
+
+		for _, v2 := range vmInfo.DataDiskIds {
+			mcir.UpdateAssociatedObjectList(nsId, common.StrDataDisk, v2, common.StrDelete, vmKey)
+		}
+		deletedResources.IdList = append(deletedResources.IdList, "VM: "+v+deleteStatus)
 	}
 
-	// delete vm group info
-	vmGroupList, err := ListVmGroupId(nsId, mcisId)
+	// delete subGroup info
+	subGroupList, err := ListSubGroupId(nsId, mcisId)
 	if err != nil {
 		common.CBLog.Error(err)
-		return err
+		return deletedResources, err
 	}
-	for _, v := range vmGroupList {
-		vmGroupKey := common.GenMcisVmGroupKey(nsId, mcisId, v)
-		fmt.Println(vmGroupKey)
-		err := common.CBStore.Delete(vmGroupKey)
+	for _, v := range subGroupList {
+		subGroupKey := common.GenMcisSubGroupKey(nsId, mcisId, v)
+		fmt.Println(subGroupKey)
+		err := common.CBStore.Delete(subGroupKey)
 		if err != nil {
 			common.CBLog.Error(err)
-			return err
+			return deletedResources, err
 		}
+		deletedResources.IdList = append(deletedResources.IdList, "SubGroup: "+v+deleteStatus)
+	}
+
+	// delete associated CSP NLBs
+	forceFlag := "false"
+	if option == "force" {
+		forceFlag = "true"
+	}
+	output, err := DelAllNLB(nsId, mcisId, "", forceFlag)
+	if err != nil {
+		common.CBLog.Error(err)
+		return deletedResources, err
+	}
+	deletedResources.IdList = append(deletedResources.IdList, output.IdList...)
+
+	// delete associated MCIS NLBs
+	mcisNlbId := mcisId + "-nlb"
+	check, _ = CheckMcis(nsId, mcisNlbId)
+	if check {
+		mcisNlbDeleteResult, err := DelMcis(nsId, mcisNlbId, option)
+		if err != nil {
+			common.CBLog.Error(err)
+			return deletedResources, err
+		}
+		deletedResources.IdList = append(deletedResources.IdList, mcisNlbDeleteResult.IdList...)
 	}
 
 	// delete mcis info
 	err = common.CBStore.Delete(key)
 	if err != nil {
 		common.CBLog.Error(err)
-		return err
+		return deletedResources, err
 	}
+	deletedResources.IdList = append(deletedResources.IdList, "MCIS: "+mcisId+deleteStatus)
 
-	return nil
+	return deletedResources, nil
 }
 
 // DelMcisVm is func to delete VM object
@@ -1515,20 +2040,28 @@ func DelMcisVm(nsId string, mcisId string, vmId string, option string) error {
 		return err
 	}
 
-	mcir.UpdateAssociatedObjectList(nsId, common.StrImage, vmInfo.ImageId, common.StrDelete, key)
+	_, err = mcir.UpdateAssociatedObjectList(nsId, common.StrImage, vmInfo.ImageId, common.StrDelete, key)
+	if err != nil {
+		mcir.UpdateAssociatedObjectList(nsId, common.StrCustomImage, vmInfo.ImageId, common.StrDelete, key)
+	}
+
 	mcir.UpdateAssociatedObjectList(nsId, common.StrSpec, vmInfo.SpecId, common.StrDelete, key)
 	mcir.UpdateAssociatedObjectList(nsId, common.StrSSHKey, vmInfo.SshKeyId, common.StrDelete, key)
 	mcir.UpdateAssociatedObjectList(nsId, common.StrVNet, vmInfo.VNetId, common.StrDelete, key)
 
-	for _, v2 := range vmInfo.SecurityGroupIds {
-		mcir.UpdateAssociatedObjectList(nsId, common.StrSecurityGroup, v2, common.StrDelete, key)
+	for _, v := range vmInfo.SecurityGroupIds {
+		mcir.UpdateAssociatedObjectList(nsId, common.StrSecurityGroup, v, common.StrDelete, key)
+	}
+
+	for _, v := range vmInfo.DataDiskIds {
+		mcir.UpdateAssociatedObjectList(nsId, common.StrDataDisk, v, common.StrDelete, key)
 	}
 
 	return nil
 }
 
-// CoreDelAllMcis is func to delete all MCIS objects
-func CoreDelAllMcis(nsId string, option string) (string, error) {
+// DelAllMcis is func to delete all MCIS objects
+func DelAllMcis(nsId string, option string) (string, error) {
 
 	err := common.CheckString(nsId)
 	if err != nil {
@@ -1547,7 +2080,7 @@ func CoreDelAllMcis(nsId string, option string) (string, error) {
 	}
 
 	for _, v := range mcisList {
-		err := DelMcis(nsId, v, option)
+		_, err := DelMcis(nsId, v, option)
 		if err != nil {
 			common.CBLog.Error(err)
 			return "", fmt.Errorf("Failed to delete All MCISs")

@@ -142,6 +142,34 @@ func CheckMcis(nsId string, mcisId string) (bool, error) {
 
 }
 
+// CheckSubGroup func is to check given subGroupId is duplicated with existing
+func CheckSubGroup(nsId string, mcisId string, subGroupId string) (bool, error) {
+
+	err := common.CheckString(nsId)
+	if err != nil {
+		common.CBLog.Error(err)
+		return false, err
+	}
+
+	err = common.CheckString(mcisId)
+	if err != nil {
+		common.CBLog.Error(err)
+		return false, err
+	}
+
+	subGroupList, err := ListSubGroupId(nsId, mcisId)
+	if err != nil {
+		common.CBLog.Error(err)
+		return false, err
+	}
+	for _, v := range subGroupList {
+		if strings.EqualFold(v, subGroupId) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func CheckVm(nsId string, mcisId string, vmId string) (bool, error) {
 
 	// Check parameters' emptiness
@@ -347,6 +375,42 @@ func InspectResources(connConfig string, resourceType string) (InspectResource, 
 
 		// Bring TB resources
 		switch resourceType {
+		case common.StrNLB:
+			mcisListinNs, _ := ListMcisId(ns)
+			if mcisListinNs == nil {
+				continue
+			}
+			for _, mcis := range mcisListinNs {
+				nlbListInMcis, err := ListNLBId(ns, mcis)
+				if err != nil {
+					common.CBLog.Error(err)
+					err := fmt.Errorf("an error occurred while getting resource list")
+					return nullObj, err
+				}
+				if nlbListInMcis == nil {
+					continue
+				}
+
+				for _, nlbId := range nlbListInMcis {
+					nlb, err := GetNLB(ns, mcis, nlbId)
+					if err != nil {
+						common.CBLog.Error(err)
+						err := fmt.Errorf("an error occurred while getting resource list")
+						return nullObj, err
+					}
+
+					if nlb.ConnectionName == connConfig { // filtering
+						temp := resourceOnTumblebugInfo{}
+						temp.IdByTb = nlb.Id
+						temp.IdByCsp = nlb.CspNLBId
+						temp.NsId = ns
+						temp.McisId = mcis
+						temp.ObjectKey = GenNLBKey(ns, mcis, nlb.Id)
+
+						TbResourceList.Info = append(TbResourceList.Info, temp)
+					}
+				}
+			}
 		case common.StrVM:
 			mcisListinNs, _ := ListMcisId(ns)
 			if mcisListinNs == nil {
@@ -449,6 +513,53 @@ func InspectResources(connConfig string, resourceType string) (InspectResource, 
 					TbResourceList.Info = append(TbResourceList.Info, temp)
 				}
 			}
+		case common.StrDataDisk:
+			resourceListInNs, err := mcir.ListResource(ns, resourceType, "", "")
+			if err != nil {
+				common.CBLog.Error(err)
+				err := fmt.Errorf("an error occurred while getting resource list")
+				return nullObj, err
+			}
+			resourcesInNs := resourceListInNs.([]mcir.TbDataDiskInfo) // type assertion
+			if len(resourcesInNs) == 0 {
+				continue
+			}
+			for _, resource := range resourcesInNs {
+				if resource.ConnectionName == connConfig { // filtering
+					temp := resourceOnTumblebugInfo{}
+					temp.IdByTb = resource.Id
+					temp.IdByCsp = resource.CspDataDiskId
+					temp.NsId = ns
+					temp.ObjectKey = common.GenResourceKey(ns, resourceType, resource.Id)
+
+					TbResourceList.Info = append(TbResourceList.Info, temp)
+				}
+			}
+		case common.StrCustomImage:
+			resourceListInNs, err := mcir.ListResource(ns, resourceType, "", "")
+			if err != nil {
+				common.CBLog.Error(err)
+				err := fmt.Errorf("an error occurred while getting resource list")
+				return nullObj, err
+			}
+			resourcesInNs := resourceListInNs.([]mcir.TbCustomImageInfo) // type assertion
+			if len(resourcesInNs) == 0 {
+				continue
+			}
+			for _, resource := range resourcesInNs {
+				if resource.ConnectionName == connConfig { // filtering
+					temp := resourceOnTumblebugInfo{}
+					temp.IdByTb = resource.Id
+					temp.IdByCsp = resource.CspCustomImageId
+					temp.NsId = ns
+					temp.ObjectKey = common.GenResourceKey(ns, resourceType, resource.Id)
+
+					TbResourceList.Info = append(TbResourceList.Info, temp)
+				}
+			}
+		default:
+			err = fmt.Errorf("Invalid resourceType: " + resourceType)
+			return nullObj, err
 		}
 	}
 
@@ -464,6 +575,8 @@ func InspectResources(connConfig string, resourceType string) (InspectResource, 
 
 	var spiderRequestURL string
 	switch resourceType {
+	case common.StrNLB:
+		spiderRequestURL = common.SpiderRestUrl + "/allnlb"
 	case common.StrVM:
 		spiderRequestURL = common.SpiderRestUrl + "/allvm"
 	case common.StrVNet:
@@ -472,6 +585,13 @@ func InspectResources(connConfig string, resourceType string) (InspectResource, 
 		spiderRequestURL = common.SpiderRestUrl + "/allsecuritygroup"
 	case common.StrSSHKey:
 		spiderRequestURL = common.SpiderRestUrl + "/allkeypair"
+	case common.StrDataDisk:
+		spiderRequestURL = common.SpiderRestUrl + "/alldisk"
+	case common.StrCustomImage:
+		spiderRequestURL = common.SpiderRestUrl + "/allmyimage"
+	default:
+		err = fmt.Errorf("Invalid resourceType: " + resourceType)
+		return nullObj, err
 	}
 
 	resp, err := client.R().
@@ -584,7 +704,10 @@ type inspectOverview struct {
 	VNet          int `json:"vNet"`
 	SecurityGroup int `json:"securityGroup"`
 	SshKey        int `json:"sshKey"`
+	DataDisk      int `json:"dataDisk"`
+	CustomImage   int `json:"customImage"`
 	Vm            int `json:"vm"`
+	NLB           int `json:"nlb"`
 }
 
 // InspectResourcesOverview func is to check all resources in CB-TB and CSPs
@@ -651,6 +774,22 @@ func InspectResourcesOverview() (InspectResourceAllResult, error) {
 			temp.TumblebugOverview.SshKey = inspectResult.ResourceOverview.OnTumblebug
 			temp.CspOnlyOverview.SshKey = inspectResult.ResourceOverview.OnCspOnly
 
+			inspectResult, err = InspectResources(k.ConfigName, common.StrDataDisk)
+			if err != nil {
+				common.CBLog.Error(err)
+				temp.SystemMessage += err.Error()
+			}
+			temp.TumblebugOverview.DataDisk = inspectResult.ResourceOverview.OnTumblebug
+			temp.CspOnlyOverview.DataDisk = inspectResult.ResourceOverview.OnCspOnly
+
+			inspectResult, err = InspectResources(k.ConfigName, common.StrCustomImage)
+			if err != nil {
+				common.CBLog.Error(err)
+				temp.SystemMessage += err.Error()
+			}
+			temp.TumblebugOverview.CustomImage = inspectResult.ResourceOverview.OnTumblebug
+			temp.CspOnlyOverview.CustomImage = inspectResult.ResourceOverview.OnCspOnly
+
 			inspectResult, err = InspectResources(k.ConfigName, common.StrVM)
 			if err != nil {
 				common.CBLog.Error(err)
@@ -658,6 +797,15 @@ func InspectResourcesOverview() (InspectResourceAllResult, error) {
 			}
 			temp.TumblebugOverview.Vm = inspectResult.ResourceOverview.OnTumblebug
 			temp.CspOnlyOverview.Vm = inspectResult.ResourceOverview.OnCspOnly
+
+			inspectResult, err = InspectResources(k.ConfigName, common.StrNLB)
+			if err != nil {
+				common.CBLog.Error(err)
+				temp.SystemMessage += err.Error()
+			}
+			temp.TumblebugOverview.NLB = inspectResult.ResourceOverview.OnTumblebug
+			temp.CspOnlyOverview.NLB = inspectResult.ResourceOverview.OnCspOnly
+
 			temp.ElapsedTime = int(math.Round(time.Now().Sub(startTimeForConnection).Seconds()))
 
 			output.InspectResult = append(output.InspectResult, temp)
@@ -671,12 +819,18 @@ func InspectResourcesOverview() (InspectResourceAllResult, error) {
 		output.TumblebugOverview.VNet += k.TumblebugOverview.VNet
 		output.TumblebugOverview.SecurityGroup += k.TumblebugOverview.SecurityGroup
 		output.TumblebugOverview.SshKey += k.TumblebugOverview.SshKey
+		output.TumblebugOverview.DataDisk += k.TumblebugOverview.DataDisk
+		output.TumblebugOverview.CustomImage += k.TumblebugOverview.CustomImage
 		output.TumblebugOverview.Vm += k.TumblebugOverview.Vm
+		output.TumblebugOverview.NLB += k.TumblebugOverview.NLB
 
 		output.CspOnlyOverview.VNet += k.CspOnlyOverview.VNet
 		output.CspOnlyOverview.SecurityGroup += k.CspOnlyOverview.SecurityGroup
 		output.CspOnlyOverview.SshKey += k.CspOnlyOverview.SshKey
+		output.CspOnlyOverview.DataDisk += k.CspOnlyOverview.DataDisk
+		output.CspOnlyOverview.CustomImage += k.CspOnlyOverview.CustomImage
 		output.CspOnlyOverview.Vm += k.CspOnlyOverview.Vm
+		output.CspOnlyOverview.NLB += k.CspOnlyOverview.NLB
 
 		if k.SystemMessage != "" {
 			errorConnectionCnt++
@@ -716,7 +870,10 @@ type registerationOverview struct {
 	VNet          int `json:"vNet"`
 	SecurityGroup int `json:"securityGroup"`
 	SshKey        int `json:"sshKey"`
+	DataDisk      int `json:"dataDisk"`
+	CustomImage   int `json:"customImage"`
 	Vm            int `json:"vm"`
+	NLB           int `json:"nlb"`
 	Failed        int `json:"failed"`
 }
 
@@ -772,7 +929,10 @@ func RegisterCspNativeResourcesAll(nsId string, mcisId string, option string) (R
 		output.RegisterationOverview.VNet += k.RegisterationOverview.VNet
 		output.RegisterationOverview.SecurityGroup += k.RegisterationOverview.SecurityGroup
 		output.RegisterationOverview.SshKey += k.RegisterationOverview.SshKey
+		output.RegisterationOverview.DataDisk += k.RegisterationOverview.DataDisk
+		output.RegisterationOverview.CustomImage += k.RegisterationOverview.CustomImage
 		output.RegisterationOverview.Vm += k.RegisterationOverview.Vm
+		output.RegisterationOverview.NLB += k.RegisterationOverview.NLB
 		output.RegisterationOverview.Failed += k.RegisterationOverview.Failed
 
 		if k.SystemMessage != "" {
@@ -897,9 +1057,71 @@ func RegisterCspNativeResources(nsId string, connConfig string, mcisId string, o
 		}
 
 		fmt.Printf("\n\n%s [Elapsed]%s %d \n\n", connConfig, common.StrSSHKey, int(math.Round(time.Now().Sub(startTime03).Seconds()))) //tmp
+
+		startTime04 := time.Now() //tmp
+
+		// bring DataDisk list and register all
+		inspectedResources, err = InspectResources(connConfig, common.StrDataDisk)
+		if err != nil {
+			common.CBLog.Error(err)
+			result.SystemMessage += "//" + err.Error()
+		}
+		for _, r := range inspectedResources.Resources.OnCspOnly.Info {
+			req := mcir.TbDataDiskReq{
+				Name:           fmt.Sprintf("%s-%s", connConfig, r.IdByCsp),
+				ConnectionName: connConfig,
+				CspDataDiskId:  r.IdByCsp,
+			}
+			req.Name = common.ChangeIdString(req.Name)
+
+			_, err = mcir.CreateDataDisk(nsId, &req, optionFlag)
+
+			registeredStatus = ""
+			if err != nil {
+				common.CBLog.Error(err)
+				registeredStatus = "  [Failed] " + err.Error()
+				result.RegisterationOverview.DataDisk--
+				result.RegisterationOverview.Failed++
+			}
+			result.RegisterationOutputs.IdList = append(result.RegisterationOutputs.IdList, common.StrDataDisk+": "+req.Name+registeredStatus)
+			result.RegisterationOverview.DataDisk++
+		}
+
+		fmt.Printf("\n\n%s [Elapsed]%s %d \n\n", connConfig, common.StrDataDisk, int(math.Round(time.Now().Sub(startTime04).Seconds()))) //tmp
+
+		startTime05 := time.Now() //tmp
+
+		// bring CustomImage list and register all
+		inspectedResources, err = InspectResources(connConfig, common.StrCustomImage)
+		if err != nil {
+			common.CBLog.Error(err)
+			result.SystemMessage += "//" + err.Error()
+		}
+		for _, r := range inspectedResources.Resources.OnCspOnly.Info {
+			req := mcir.TbCustomImageReq{
+				Name:             fmt.Sprintf("%s-%s", connConfig, r.IdByCsp),
+				ConnectionName:   connConfig,
+				CspCustomImageId: r.IdByCsp,
+			}
+			req.Name = common.ChangeIdString(req.Name)
+
+			_, err = mcir.RegisterCustomImageWithId(nsId, &req)
+
+			registeredStatus = ""
+			if err != nil {
+				common.CBLog.Error(err)
+				registeredStatus = "  [Failed] " + err.Error()
+				result.RegisterationOverview.CustomImage--
+				result.RegisterationOverview.Failed++
+			}
+			result.RegisterationOutputs.IdList = append(result.RegisterationOutputs.IdList, common.StrCustomImage+": "+req.Name+registeredStatus)
+			result.RegisterationOverview.CustomImage++
+		}
+
+		fmt.Printf("\n\n%s [Elapsed]%s %d \n\n", connConfig, common.StrCustomImage, int(math.Round(time.Now().Sub(startTime05).Seconds()))) //tmp
 	}
 
-	startTime04 := time.Now() //tmp
+	startTime06 := time.Now() //tmp
 
 	if option != "exceptVm" {
 
@@ -950,10 +1172,59 @@ func RegisterCspNativeResources(nsId string, connConfig string, mcisId string, o
 	result.ConnectionName = connConfig
 	result.ElapsedTime = int(math.Round(time.Now().Sub(startTime).Seconds()))
 
-	fmt.Printf("\n\n%s [Elapsed]%s %d \n\n", connConfig, common.StrVM, int(math.Round(time.Now().Sub(startTime04).Seconds()))) //tmp
+	fmt.Printf("\n\n%s [Elapsed]%s %d \n\n", connConfig, common.StrVM, int(math.Round(time.Now().Sub(startTime06).Seconds()))) //tmp
 
 	fmt.Printf("\n\n%s [Elapsed]Total %d \n\n", connConfig, int(math.Round(time.Now().Sub(startTime).Seconds())))
 
 	return result, err
 
+}
+
+func FindTbVmByCspId(nsId string, mcisId string, vmIdByCsp string) (TbVmInfo, error) {
+
+	err := common.CheckString(nsId)
+	if err != nil {
+		common.CBLog.Error(err)
+		return TbVmInfo{}, err
+	}
+
+	err = common.CheckString(mcisId)
+	if err != nil {
+		common.CBLog.Error(err)
+		return TbVmInfo{}, err
+	}
+
+	err = common.CheckString(vmIdByCsp)
+	if err != nil {
+		common.CBLog.Error(err)
+		return TbVmInfo{}, err
+	}
+
+	check, err := CheckMcis(nsId, mcisId)
+
+	if !check {
+		err := fmt.Errorf("The MCIS " + mcisId + " does not exist.")
+		return TbVmInfo{}, err
+	}
+
+	if err != nil {
+		err := fmt.Errorf("Failed to check the existence of the MCIS " + mcisId + ".")
+		return TbVmInfo{}, err
+	}
+
+	mcis, err := GetMcisObject(nsId, mcisId)
+	if err != nil {
+		err := fmt.Errorf("Failed to get the MCIS " + mcisId + ".")
+		return TbVmInfo{}, err
+	}
+
+	vms := mcis.Vm
+	for _, v := range vms {
+		if v.IdByCSP == vmIdByCsp || v.CspViewVmDetail.IId.NameId == vmIdByCsp {
+			return v, nil
+		}
+	}
+
+	err = fmt.Errorf("Cannot find the VM %s in %s/%s", vmIdByCsp, nsId, mcisId)
+	return TbVmInfo{}, err
 }

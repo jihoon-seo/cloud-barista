@@ -71,7 +71,7 @@ func RestGetControlMcis(c echo.Context) error {
 // @Produce  json
 // @Param nsId path string true "Namespace ID" default(ns01)
 // @Param mcisId path string true "MCIS ID" default(mcis01)
-// @Param vmId path string true "VM ID" default(vm01)
+// @Param vmId path string true "VM ID" default(g1-1)
 // @Param action query string true "Action to MCIS" Enums(suspend, resume, reboot, terminate)
 // @Success 200 {object} common.SimpleMsg
 // @Failure 404 {object} common.SimpleMsg
@@ -100,4 +100,40 @@ func RestGetControlMcisVm(c echo.Context) error {
 		mapA := map[string]string{"message": "'action' should be one of these: suspend, resume, reboot, terminate"}
 		return c.JSON(http.StatusBadRequest, &mapA)
 	}
+}
+
+// RestPostMcisVmSnapshot godoc
+// @Summary Snapshot VM and create a Custom Image Object using the Snapshot
+// @Description Snapshot VM and create a Custom Image Object using the Snapshot
+// @Tags [Infra resource] Snapshot and Custom Image Management
+// @Accept  json
+// @Produce  json
+// @Param vmSnapshotReq body mcis.TbVmSnapshotReq true "Request body to create VM snapshot"
+// @Param nsId path string true "Namespace ID" default(ns01)
+// @Param mcisId path string true "MCIS ID" default(mcis01)
+// @Param vmId path string true "VM ID" default(g1-1)
+// @Success 200 {object} mcir.TbCustomImageInfo
+// @Failure 404 {object} common.SimpleMsg
+// @Failure 500 {object} common.SimpleMsg
+// @Router /ns/{nsId}/mcis/{mcisId}/vm/{vmId}/snapshot [post]
+func RestPostMcisVmSnapshot(c echo.Context) error {
+
+	nsId := c.Param("nsId")
+	mcisId := c.Param("mcisId")
+	vmId := c.Param("vmId")
+
+	u := &mcis.TbVmSnapshotReq{}
+	if err := c.Bind(u); err != nil {
+		return err
+	}
+
+	result, err := mcis.CreateVmSnapshot(nsId, mcisId, vmId, u.Name)
+	if err != nil {
+		mapA := map[string]string{"message": err.Error()}
+		return c.JSON(http.StatusNotFound, &mapA)
+	}
+
+	// common.PrintJsonPretty(result)
+
+	return c.JSON(http.StatusOK, result)
 }

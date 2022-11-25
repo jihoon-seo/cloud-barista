@@ -18,9 +18,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/rand"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cloud-barista/cb-tumblebug/src/core/common"
 	"github.com/cloud-barista/cb-tumblebug/src/core/mcir"
@@ -59,8 +61,8 @@ type PriorityInfo struct {
 
 // FilterCondition is struct for .
 type PriorityCondition struct {
-	Metric    string            `json:"metric" example:"location" enums:"location,cost,latency"` // location,cost,latency
-	Weight    string            `json:"weight" example:"0.3" enums:"0.1,0.2,..."`                // 0.3
+	Metric    string            `json:"metric" example:"location" enums:"location,cost,random,performance,latency"`
+	Weight    string            `json:"weight" example:"0.3" enums:"0.1,0.2,..."`
 	Parameter []ParameterKeyVal `json:"parameter,omitempty"`
 }
 
@@ -88,59 +90,61 @@ func RecommendVm(nsId string, plan DeploymentPlan) ([]mcir.TbSpecInfo, error) {
 	fmt.Println("[Filtering specs]")
 
 	for _, v := range plan.Filter.Policy {
-		metric := v.Metric
+		metric := mcir.ToNamingRuleCompatible(v.Metric)
 		conditions := v.Condition
 		for _, condition := range conditions {
 
-			operand64, err := strconv.ParseFloat(strings.ReplaceAll(condition.Operand, " ", ""), 32)
-			operand := float32(operand64)
-			if err != nil {
-				common.CBLog.Error(err)
-				return []mcir.TbSpecInfo{}, err
+			var operand64 float64
+			var operand float32
+			var err error
+			if metric == "cpu" || metric == "memory" || metric == "cost" {
+				operand64, err = strconv.ParseFloat(strings.ReplaceAll(condition.Operand, " ", ""), 32)
+				operand = float32(operand64)
+				if err != nil {
+					common.CBLog.Error(err)
+					return []mcir.TbSpecInfo{}, err
+				}
 			}
 
-			switch condition.Operator {
-			case "<=":
-
-				switch metric {
-				case "cpu":
+			switch metric {
+			case "cpu":
+				switch condition.Operator {
+				case "<=":
 					u.NumvCPU.Max = operand
-				case "memory":
-					u.MemGiB.Max = operand
-				case "cost":
-					u.CostPerHour.Max = operand
-				default:
-					fmt.Println("[Checking] Not available metric " + metric)
-				}
-
-			case ">=":
-
-				switch metric {
-				case "cpu":
+				case ">=":
 					u.NumvCPU.Min = operand
-				case "memory":
-					u.MemGiB.Min = operand
-				case "cost":
-					u.CostPerHour.Min = operand
-				default:
-					fmt.Println("[Checking] Not available metric " + metric)
-				}
-
-			case "==":
-
-				switch metric {
-				case "cpu":
+				case "==":
 					u.NumvCPU.Max = operand
 					u.NumvCPU.Min = operand
-				case "memory":
+				}
+			case "memory":
+				switch condition.Operator {
+				case "<=":
+					u.MemGiB.Max = operand
+				case ">=":
+					u.MemGiB.Min = operand
+				case "==":
 					u.MemGiB.Max = operand
 					u.MemGiB.Min = operand
-				case "cost":
+				}
+			case "cost":
+				switch condition.Operator {
+				case "<=":
+					u.CostPerHour.Max = operand
+				case ">=":
+					u.CostPerHour.Min = operand
+				case "==":
 					u.CostPerHour.Max = operand
 					u.CostPerHour.Min = operand
-				default:
-					fmt.Println("[Checking] Not available metric " + metric)
 				}
+			case "region":
+				u.RegionName = condition.Operand
+			case "provider":
+				u.ProviderName = condition.Operand
+			case "specname":
+				u.CspSpecName = condition.Operand
+			default:
+				fmt.Println("[Checking] Not available metric " + metric)
 			}
 		}
 	}
@@ -169,17 +173,24 @@ func RecommendVm(nsId string, plan DeploymentPlan) ([]mcir.TbSpecInfo, error) {
 			prioritySpecs, err = RecommendVmPerformance(nsId, &filteredSpecs)
 		case "cost":
 			prioritySpecs, err = RecommendVmCost(nsId, &filteredSpecs)
+		case "random":
+			prioritySpecs, err = RecommendVmRandom(nsId, &filteredSpecs)
+		case "latency":
+			prioritySpecs, err = RecommendVmLatency(nsId, &filteredSpecs, &v.Parameter)
 		default:
-			// fmt.Println("[Checking] Not available metric " + metric)
+			prioritySpecs, err = RecommendVmCost(nsId, &filteredSpecs)
 		}
 
+	}
+	if plan.Priority.Policy == nil {
+		prioritySpecs, err = RecommendVmCost(nsId, &filteredSpecs)
 	}
 
 	// limit the number of items in result list
 	result := []mcir.TbSpecInfo{}
 	limitNum, err := strconv.Atoi(plan.Limit)
 	if err != nil {
-		limitNum = 65535
+		limitNum = math.MaxInt
 	}
 	for i, v := range prioritySpecs {
 		result = append(result, v)
@@ -190,6 +201,99 @@ func RecommendVm(nsId string, plan DeploymentPlan) ([]mcir.TbSpecInfo, error) {
 
 	return result, nil
 
+}
+
+// RecommendVmLatency func prioritize specs by latency based on given MCIS (fair)
+func RecommendVmLatency(nsId string, specList *[]mcir.TbSpecInfo, param *[]ParameterKeyVal) ([]mcir.TbSpecInfo, error) {
+
+	result := []mcir.TbSpecInfo{}
+
+	for _, v := range *param {
+
+		switch v.Key {
+		case "latencyMinimal":
+
+			// distance (in terms of latency)
+			type distanceType struct {
+				distance      float64
+				index         int
+				priorityIndex int
+			}
+			distances := []distanceType{}
+
+			// Evaluate
+			for i, k := range *specList {
+				sumLatancy := 0.0
+				for _, region := range v.Val {
+					l, _ := GetLatency(region, k.RegionName)
+					sumLatancy += l
+				}
+
+				distances = append(distances, distanceType{})
+				distances[i].distance = sumLatancy
+				distances[i].index = i
+			}
+
+			// Sort
+			sort.Slice(distances, func(i, j int) bool {
+				return (*specList)[i].CostPerHour < (*specList)[j].CostPerHour
+			})
+			sort.Slice(distances, func(i, j int) bool {
+				return distances[i].distance < distances[j].distance
+			})
+			fmt.Printf("\n[Latency]\n %v \n", distances)
+
+			priorityCnt := 1
+			for i := range distances {
+
+				// priorityIndex++ if two distances are not equal (give the same priorityIndex if two variables are same)
+				if i != 0 {
+					if distances[i].distance > distances[i-1].distance {
+						priorityCnt++
+					}
+				}
+				distances[i].priorityIndex = priorityCnt
+
+			}
+
+			max := float32(distances[len(*specList)-1].distance)
+			min := float32(distances[0].distance)
+
+			for i := range *specList {
+				// update OrderInFilteredResult based on calculated priorityIndex
+				(*specList)[distances[i].index].OrderInFilteredResult = uint16(distances[i].priorityIndex)
+				// assign nomalized priorityIdex value to EvaluationScore09
+				(*specList)[distances[i].index].EvaluationScore09 = float32((max - float32(distances[i].distance)) / (max - min + 0.0000001)) // Add small value to avoid NaN by division
+				(*specList)[distances[i].index].EvaluationScore10 = float32(distances[i].distance)
+				// fmt.Printf("\n [%v] OrderInFilteredResult:%v, max:%v, min:%v, distance:%v, eval:%v \n", i, (*specList)[distances[i].index].OrderInFilteredResult, max, min, float32(distances[i].distance), (*specList)[distances[i].index].EvaluationScore09)
+			}
+		default:
+			// fmt.Println("[Checking] Not available metric " + metric)
+		}
+
+	}
+
+	for i := range *specList {
+		result = append(result, (*specList)[i])
+		//result[i].OrderInFilteredResult = uint16(i + 1)
+	}
+
+	// if evaluations for distance are same, low cost will have priolity
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].OrderInFilteredResult < result[j].OrderInFilteredResult {
+			return true
+		} else if result[i].OrderInFilteredResult > result[j].OrderInFilteredResult {
+			return false
+		} else {
+			return result[i].CostPerHour < result[j].CostPerHour
+		}
+		//return result[i].OrderInFilteredResult < result[j].OrderInFilteredResult
+	})
+	// fmt.Printf("\n result : %v \n", result)
+
+	// updatedSpec, err := mcir.UpdateSpec(nsId, *result)
+	// content, err = mcir.SortSpecs(*specList, "memGiB", "descending")
+	return result, nil
 }
 
 // RecommendVmLocation func prioritize specs based on given location
@@ -234,6 +338,9 @@ func RecommendVmLocation(nsId string, specList *[]mcir.TbSpecInfo, param *[]Para
 			}
 
 			sort.Slice(distances, func(i, j int) bool {
+				return (*specList)[i].CostPerHour < (*specList)[j].CostPerHour
+			})
+			sort.Slice(distances, func(i, j int) bool {
 				return distances[i].distance < distances[j].distance
 			})
 			fmt.Printf("\n distances : %v \n", distances)
@@ -260,13 +367,86 @@ func RecommendVmLocation(nsId string, specList *[]mcir.TbSpecInfo, param *[]Para
 				// assign nomalized priorityIdex value to EvaluationScore09
 				(*specList)[distances[i].index].EvaluationScore09 = float32((max - float32(distances[i].distance)) / (max - min + 0.0000001)) // Add small value to avoid NaN by division
 				(*specList)[distances[i].index].EvaluationScore10 = float32(distances[i].distance)
-				fmt.Printf("\n distances : %v %v %v %v %v \n", distances, max, min, float32(distances[i].distance), (*specList)[distances[i].index].EvaluationScore09)
+				// fmt.Printf("\n [%v] OrderInFilteredResult:%v, max:%v, min:%v, distance:%v, eval:%v \n", i, (*specList)[distances[i].index].OrderInFilteredResult, max, min, float32(distances[i].distance), (*specList)[distances[i].index].EvaluationScore09)
 			}
 
 		case "coordinateWithin":
 			//
 		case "coordinateFair":
-			//
+			var err error
+
+			// Calculate centroid of coordinate clusters
+			latitudeSum := 0.0
+			longitudeSum := 0.0
+			for _, coordinateStr := range v.Val {
+				slice := strings.Split(coordinateStr, "/")
+				latitudeEach, err := strconv.ParseFloat(strings.ReplaceAll(slice[0], " ", ""), 32)
+				if err != nil {
+					common.CBLog.Error(err)
+					return []mcir.TbSpecInfo{}, err
+				}
+				longitudeEach, err := strconv.ParseFloat(strings.ReplaceAll(slice[1], " ", ""), 32)
+				if err != nil {
+					common.CBLog.Error(err)
+					return []mcir.TbSpecInfo{}, err
+				}
+				latitudeSum += latitudeEach
+				longitudeSum += longitudeEach
+			}
+			latitude := latitudeSum / (float64)(len(v.Val))
+			longitude := longitudeSum / (float64)(len(v.Val))
+
+			// Sorting, closes to the centroid.
+
+			type distanceType struct {
+				distance      float64
+				index         int
+				priorityIndex int
+			}
+			distances := []distanceType{}
+
+			for i := range *specList {
+				distances = append(distances, distanceType{})
+				distances[i].distance, err = getDistance(latitude, longitude, (*specList)[i].ConnectionName)
+				if err != nil {
+					common.CBLog.Error(err)
+					return []mcir.TbSpecInfo{}, err
+				}
+				distances[i].index = i
+			}
+
+			sort.Slice(distances, func(i, j int) bool {
+				return (*specList)[i].CostPerHour < (*specList)[j].CostPerHour
+			})
+			sort.Slice(distances, func(i, j int) bool {
+				return distances[i].distance < distances[j].distance
+			})
+			fmt.Printf("\n distances : %v \n", distances)
+
+			priorityCnt := 1
+			for i := range distances {
+
+				// priorityIndex++ if two distances are not equal (give the same priorityIndex if two variables are same)
+				if i != 0 {
+					if distances[i].distance > distances[i-1].distance {
+						priorityCnt++
+					}
+				}
+				distances[i].priorityIndex = priorityCnt
+
+			}
+
+			max := float32(distances[len(*specList)-1].distance)
+			min := float32(distances[0].distance)
+
+			for i := range *specList {
+				// update OrderInFilteredResult based on calculated priorityIndex
+				(*specList)[distances[i].index].OrderInFilteredResult = uint16(distances[i].priorityIndex)
+				// assign nomalized priorityIdex value to EvaluationScore09
+				(*specList)[distances[i].index].EvaluationScore09 = float32((max - float32(distances[i].distance)) / (max - min + 0.0000001)) // Add small value to avoid NaN by division
+				(*specList)[distances[i].index].EvaluationScore10 = float32(distances[i].distance)
+				// fmt.Printf("\n [%v] OrderInFilteredResult:%v, max:%v, min:%v, distance:%v, eval:%v \n", i, (*specList)[distances[i].index].OrderInFilteredResult, max, min, float32(distances[i].distance), (*specList)[distances[i].index].EvaluationScore09)
+			}
 		default:
 			// fmt.Println("[Checking] Not available metric " + metric)
 		}
@@ -278,10 +458,18 @@ func RecommendVmLocation(nsId string, specList *[]mcir.TbSpecInfo, param *[]Para
 		//result[i].OrderInFilteredResult = uint16(i + 1)
 	}
 
+	// if evaluations for distance are same, low cost will have priolity
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].OrderInFilteredResult < result[j].OrderInFilteredResult
+		if result[i].OrderInFilteredResult < result[j].OrderInFilteredResult {
+			return true
+		} else if result[i].OrderInFilteredResult > result[j].OrderInFilteredResult {
+			return false
+		} else {
+			return result[i].CostPerHour < result[j].CostPerHour
+		}
+		//return result[i].OrderInFilteredResult < result[j].OrderInFilteredResult
 	})
-	fmt.Printf("\n result : %v \n", result)
+	// fmt.Printf("\n result : %v \n", result)
 
 	// updatedSpec, err := mcir.UpdateSpec(nsId, *result)
 	// content, err = mcir.SortSpecs(*specList, "memGiB", "descending")
@@ -320,6 +508,17 @@ func getDistance(latitude float64, longitude float64, ConnectionName string) (fl
 
 }
 
+// GetLatency func get latency between given two regions
+func GetLatency(src string, dest string) (float64, error) {
+	latencyString := common.RuntimeLatancyMap[common.RuntimeLatancyMapIndex[src]][common.RuntimeLatancyMapIndex[dest]]
+	latency, err := strconv.ParseFloat(strings.ReplaceAll(latencyString, " ", ""), 32)
+	if err != nil {
+		common.CBLog.Error(err)
+		return 999999, err
+	}
+	return latency, nil
+}
+
 // getHaversineDistance func return HaversineDistance
 func getHaversineDistance(a1 float64, b1 float64, a2 float64, b2 float64) (distance float64) {
 	deltaA := (a2 - a1) * (math.Pi / 180)
@@ -331,6 +530,31 @@ func getHaversineDistance(a1 float64, b1 float64, a2 float64, b2 float64) (dista
 
 	earthRadius := float64(6371)
 	return (earthRadius * c)
+}
+
+// RecommendVmRandom func prioritize specs randomly
+func RecommendVmRandom(nsId string, specList *[]mcir.TbSpecInfo) ([]mcir.TbSpecInfo, error) {
+
+	result := []mcir.TbSpecInfo{}
+
+	for i := range *specList {
+		result = append(result, (*specList)[i])
+	}
+
+	rand.Seed(time.Now().UnixNano())
+	rand.Shuffle(len(result), func(i, j int) { result[i], result[j] = result[j], result[i] })
+
+	Max := float32(result[len(result)-1].CostPerHour)
+	Min := float32(result[0].CostPerHour)
+
+	for i := range result {
+		result[i].OrderInFilteredResult = uint16(i + 1)
+		result[i].EvaluationScore09 = float32((Max - result[i].CostPerHour) / (Max - Min + 0.0000001)) // Add small value to avoid NaN by division
+	}
+
+	fmt.Printf("\n result : %v \n", result)
+
+	return result, nil
 }
 
 // RecommendVmCost func prioritize specs based on given Cost

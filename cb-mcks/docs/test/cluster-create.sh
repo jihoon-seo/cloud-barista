@@ -52,28 +52,37 @@ create() {
 		{
 			"name": "${v_CLUSTER_NAME}",
 			"label": "",
-			"installMonAgent": "",
 			"description": "",
 			"config": {
+				"installMonAgent": "",
 				"kubernetes": {
 					"networkCni": "canal",
 					"podCidr": "10.244.0.0/16",
 					"serviceCidr": "10.96.0.0/12",
 					"serviceDnsDomain": "cluster.local"
+					"loadbalancer": "",
 				}
 			},
 			"controlPlane": [
 				{
 					"connection": "config-azure-koreacentral",
 					"count": 3,
-					"spec": "Standard_B2s"
+					"spec": "Standard_B2s",
+					"rootDisk": {
+						"type": "defalut",
+						"size": "defalut"
+					},
 				}
 			],
 			"worker": [
 				{
 					"connection": "config-ibm-jp-tok",
 					"count": 1,
-					"spec": "bx2-2x8"
+					"spec": "bx2-2x8",
+					"rootDisk": {
+						"type": "defalut",
+						"size": "defalut"
+					}
 				}
 			]
 		}
@@ -88,9 +97,9 @@ EOF
 			"ReqInfo": {
 					"name": "'${v_CLUSTER_NAME}'",
 					"label": "",
-					"installMonAgent": "no",                              
 					"description": "",
 					"config": {
+						"installMonAgent": "no",
 						"kubernetes": {
 							"networkCni": "canal",
 							"podCidr": "10.244.0.0/16",

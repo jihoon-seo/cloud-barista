@@ -43,11 +43,12 @@ func CreateTelegrafConfigFile(installInfo common.AgentInstallInfo) (string, erro
 	strConf = strings.ReplaceAll(strConf, "{{mcis_id}}", installInfo.McisId)
 	strConf = strings.ReplaceAll(strConf, "{{vm_id}}", installInfo.VmId)
 	strConf = strings.ReplaceAll(strConf, "{{csp_type}}", installInfo.CspType)
+	strConf = strings.ReplaceAll(strConf, "{{service_type}}", installInfo.ServiceType)
 	strConf = strings.ReplaceAll(strConf, "{{mechanism}}", mechanism)
 	strConf = strings.ReplaceAll(strConf, "{{server_port}}", fmt.Sprintf("%d", serverPort))
 
-	strConf = strings.ReplaceAll(strConf, "{{topic}}", fmt.Sprintf("%s_mcis_%s_%s_%s", installInfo.NsId, installInfo.McisId, installInfo.VmId, installInfo.CspType))
-	strConf = strings.ReplaceAll(strConf, "{{agent_collect_interval}}", fmt.Sprintf("%ds", config.GetInstance().Monitoring.AgentInterval))
+	strConf = strings.ReplaceAll(strConf, "{{topic}}", fmt.Sprintf("%s_%s_%s_%s_%s", installInfo.NsId, installInfo.ServiceType, installInfo.McisId, installInfo.VmId, installInfo.CspType))
+	strConf = strings.ReplaceAll(strConf, "{{agent_collect_interval}}", fmt.Sprintf("%ds", config.GetInstance().Monitoring.MCISAgentInterval))
 
 	var kafkaPort int
 	if config.GetInstance().GetMonConfig().DeployType == types.Helm {
@@ -104,6 +105,9 @@ func InstallAgent(info common.AgentInstallInfo) (int, error) {
 		targetFile = fmt.Sprintf("$HOME/cb-dragonfly/cb-agent.rpm")
 		installCmd = fmt.Sprintf("sudo rpm -ivh $HOME/cb-dragonfly/cb-agent.rpm")
 	} else if strings.Contains(osType, common.UBUNTU) {
+		targetFile = fmt.Sprintf("$HOME/cb-dragonfly/cb-agent.deb")
+		installCmd = fmt.Sprintf("sudo dpkg -i $HOME/cb-dragonfly/cb-agent.deb")
+	} else if strings.Contains(osType, common.DEBIAN) {
 		targetFile = fmt.Sprintf("$HOME/cb-dragonfly/cb-agent.deb")
 		installCmd = fmt.Sprintf("sudo dpkg -i $HOME/cb-dragonfly/cb-agent.deb")
 	}
@@ -202,14 +206,14 @@ func InstallAgent(info common.AgentInstallInfo) (int, error) {
 	}
 
 	// 에이전트 권한 변경
-	stopcmd := fmt.Sprintf("sudo systemctl stop telegraf && sudo usermod -u 0 -o telegraf && sudo systemctl restart telegraf")
+	stopcmd := fmt.Sprintf("sudo systemctl stop telegraf && sudo usermod -u 0 -o telegraf && sudo systemctl daemon-reload && sudo systemctl restart telegraf")
 	if _, err = sshrun.SSHRun(sshInfo, stopcmd); err != nil {
 		common.CleanAgentInstall(info, &sshInfo, &osType, nil)
 		return http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to change telegraf permission, err=%s", err))
 	}
 
 	// 메타데이터 저장
-	if _, _, err = common.PutAgent(info, 0, common.Enable, common.Healthy); err != nil {
+	if _, _, err = common.PutAgent(info, 0, common.Enable, common.Unhealthy); err != nil {
 		common.CleanAgentInstall(info, &sshInfo, &osType, nil)
 		return http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to put metadata to cb-store, error=%s", err))
 	}
@@ -282,12 +286,12 @@ func UninstallAgent(info common.AgentInstallInfo) (int, error) {
 		return http.StatusInternalServerError, errors.New(fmt.Sprintf("failed to delete metadata, error=%s", err))
 	}
 
-	//// Topic Queue 등록
-	//if config.GetInstance().GetMonConfig().DefaultPolicy == types.PushPolicy {
-	//	if err = util.RingQueuePut(types.TopicDel, fmt.Sprintf("%s_%s_%s_%s", nsId, mcisId, vmId, cspType)); err != nil {
-	//		util.GetLogger().Error(err)
-	//	}
-	//}
+	// Topic Queue 등록
+	if config.GetInstance().GetMonConfig().DefaultPolicy == types.PushPolicy {
+		if err = util.RingQueuePut(types.TopicDel, common.MakeAgentUUID(info)); err != nil {
+			util.GetLogger().Error(err)
+		}
+	}
 	return http.StatusOK, nil
 }
 

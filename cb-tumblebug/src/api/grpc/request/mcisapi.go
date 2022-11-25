@@ -53,7 +53,7 @@ type TbMcisCreateRequest struct {
 // TbVmReq is for MCIS VM 생성 요청 구조 정의
 // type TbVmReq struct {
 // 	Name             string   `yaml:"name" json:"name"`
-// 	VmGroupSize      string   `yaml:"vmGroupSize" json:"vmGroupSize"`
+// 	SubGroupSize      string   `yaml:"subGroupSize" json:"subGroupSize"`
 // 	Label            string   `yaml:"label" json:"label"`
 // 	Description      string   `yaml:"description" json:"description"`
 // 	ConnectionName   string   `yaml:"connectionName" json:"connectionName"`
@@ -74,8 +74,8 @@ type TbVmCreateRequest struct {
 	Item   TbVmInfo `yaml:"mcisvm" json:"mcisvm"`
 }
 
-// TbVmGroupCreateRequest is for MCIS VM 그룹 생성 요청 구조 Wrapper 정의
-type TbVmGroupCreateRequest struct {
+// TbSubGroupCreateRequest is for MCIS VM 그룹 생성 요청 구조 Wrapper 정의
+type TbSubGroupCreateRequest struct {
 	NsId   string            `yaml:"nsId" json:"nsId"`
 	McisId string            `yaml:"mcisId" json:"mcisId"`
 	Item   core_mcis.TbVmReq `yaml:"groupvm" json:"groupvm"`
@@ -85,7 +85,7 @@ type TbVmGroupCreateRequest struct {
 type TbVmInfo struct {
 	Id               string               `yaml:"id" json:"id"`
 	Name             string               `yaml:"name" json:"name"`
-	VmGroupId        string               `yaml:"vmGroupId" json:"vmGroupId"`
+	SubGroupId       string               `yaml:"subGroupId" json:"subGroupId"`
 	Location         common.GeoLocation   `yaml:"location" json:"location"`
 	Status           string               `yaml:"status" json:"status"`
 	TargetStatus     string               `yaml:"targetStatus" json:"targetStatus"`
@@ -101,8 +101,6 @@ type TbVmInfo struct {
 	PublicDNS        string               `yaml:"publicDNS" json:"publicDNS"`
 	PrivateIP        string               `yaml:"privateIP" json:"privateIP"`
 	PrivateDNS       string               `yaml:"privateDNS" json:"privateDNS"`
-	VMBootDisk       string               `yaml:"vmBootDisk" json:"vmBootDisk"`
-	VMBlockDisk      string               `yaml:"vmBlockDisk" json:"vmBlockDisk"`
 	ConnectionName   string               `yaml:"connectionName" json:"connectionName"`
 	SpecId           string               `yaml:"specId" json:"specId"`
 	ImageId          string               `yaml:"imageId" json:"imageId"`
@@ -161,8 +159,6 @@ type TbVmInfo struct {
 // 	PublicDNS         string     `yaml:"PublicDNS" json:"PublicDNS"`
 // 	PrivateIP         string     `yaml:"PrivateIP" json:"PrivateIP"`
 // 	PrivateDNS        string     `yaml:"PrivateDNS" json:"PrivateDNS"`
-// 	VMBootDisk        string     `yaml:"VMBootDisk" json:"VMBootDisk"`
-// 	VMBlockDisk       string     `yaml:"VMBlockDisk" json:"VMBlockDisk"`
 // 	SSHAccessPoint    string     `yaml:"SSHAccessPoint" json:"SSHAccessPoint"`
 // 	KeyValueList      []KeyValue `yaml:"KeyValueList" json:"KeyValueList"`
 // }
@@ -821,18 +817,18 @@ func (m *MCISApi) CreateMcisVMByParam(req *TbVmCreateRequest) (string, error) {
 	return result, err
 }
 
-// CreateMcisVMGroup is to MCIS VM 그룹 생성
-func (m *MCISApi) CreateMcisVMGroup(doc string) (string, error) {
+// CreateMcisSubGroup is to MCIS VM 그룹 생성
+func (m *MCISApi) CreateMcisSubGroup(doc string) (string, error) {
 	if m.requestMCIS == nil {
 		return "", errors.New("The Open() function must be called")
 	}
 
 	m.requestMCIS.InData = doc
-	return m.requestMCIS.CreateMcisVMGroup()
+	return m.requestMCIS.CreateMcisSubGroup()
 }
 
-// CreateMcisVMGroupByParam is to MCIS VM 생성
-func (m *MCISApi) CreateMcisVMGroupByParam(req *TbVmGroupCreateRequest) (string, error) {
+// CreateMcisSubGroupByParam is to MCIS VM 생성
+func (m *MCISApi) CreateMcisSubGroupByParam(req *TbSubGroupCreateRequest) (string, error) {
 	if m.requestMCIS == nil {
 		return "", errors.New("The Open() function must be called")
 	}
@@ -844,7 +840,7 @@ func (m *MCISApi) CreateMcisVMGroupByParam(req *TbVmGroupCreateRequest) (string,
 		return "", err
 	}
 	m.requestMCIS.InData = string(j)
-	result, err := m.requestMCIS.CreateMcisVMGroup()
+	result, err := m.requestMCIS.CreateMcisSubGroup()
 	m.SetInType(holdType)
 
 	return result, err

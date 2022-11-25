@@ -15,9 +15,17 @@ import (
 	"time"
 )
 
+type ImageType string
+
+const (
+	PublicImage ImageType = "PublicImage"
+	MyImage     ImageType = "MyImage"
+)
+
 type VMReqInfo struct {
 	IId IID // {NameId, SystemId}
 
+	ImageType         ImageType // PublicImage | MyImage, default: PublicImage
 	ImageIID          IID
 	VpcIID            IID
 	SubnetIID         IID
@@ -26,11 +34,14 @@ type VMReqInfo struct {
 	VMSpecName string
 	KeyPairIID IID
 
-	RootDiskType string  // "", "SSD(gp2)", "Premium SSD", ...
-        RootDiskSize string  // "", "default", "50", "1000" (GB)
+	RootDiskType string // "", "SSD(gp2)", "Premium SSD", ...
+	RootDiskSize string // "", "default", "50", "1000" (GB)
+
+	DataDiskIIDs []IID
 
 	VMUserId     string
 	VMUserPasswd string
+	WindowsType  bool
 }
 
 type VMStatusInfo struct {
@@ -68,6 +79,7 @@ type VMInfo struct {
 	StartTime time.Time // Timezone: based on cloud-barista server location.
 
 	Region            RegionInfo //  ex) {us-east1, us-east1-c} or {ap-northeast-2}
+	ImageType         ImageType  // PublicImage | MyImage
 	ImageIId          IID
 	VMSpecName        string //  instance type or flavour, etc... ex) t2.micro or f1.micro
 	VpcIID            IID
@@ -76,12 +88,14 @@ type VMInfo struct {
 
 	KeyPairIId IID
 
-	RootDiskType	string  // "SSD(gp2)", "Premium SSD", ...
-        RootDiskSize	string  // "default", "50", "1000" (GB)
-	RootDeviceName	string // "/dev/sda1", ...
-	VMBootDisk  	string // Deprecated soon
+	RootDiskType   string // "SSD(gp2)", "Premium SSD", ...
+	RootDiskSize   string // "default", "50", "1000" (GB)
+	RootDeviceName string // "/dev/sda1", ...
 
-	VMBlockDisk string // ex)
+	DataDiskIIDs []IID
+
+	VMBootDisk  string // Deprecated soon
+	VMBlockDisk string // Deprecated soon
 
 	VMUserId     string // ex) user1
 	VMUserPasswd string
@@ -91,7 +105,6 @@ type VMInfo struct {
 	PublicDNS        string
 	PrivateIP        string
 	PrivateDNS       string
-
 
 	SSHAccessPoint string // ex) 10.2.3.2:22, 123.456.789.123:4321
 

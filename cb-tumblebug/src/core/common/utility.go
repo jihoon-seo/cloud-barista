@@ -50,6 +50,21 @@ func GenUid() string {
 	return uid.New().String()
 }
 
+// GenRandomPassword is func to return a RandomPassword
+func GenRandomPassword() string {
+	rand.Seed(time.Now().Unix())
+
+	charset := "ABCDEFG*!$"
+	shuff := []rune(charset)
+	rand.Shuffle(len(shuff), func(i, j int) {
+		shuff[i], shuff[j] = shuff[j], shuff[i]
+	})
+
+	pw := uid.New().String() + string(shuff)
+
+	return pw
+}
+
 // RandomSleep is func to make a caller waits for during random time seconds (random value within x~y)
 func RandomSleep(from int, to int) {
 	if from > to {
@@ -124,10 +139,10 @@ func GenMcisKey(nsId string, mcisId string, vmId string) string {
 
 }
 
-// GenMcisVmGroupKey is func to generate a key from vmGroupId used in keyValue store
-func GenMcisVmGroupKey(nsId string, mcisId string, groupId string) string {
+// GenMcisSubGroupKey is func to generate a key from subGroupId used in keyValue store
+func GenMcisSubGroupKey(nsId string, mcisId string, groupId string) string {
 
-	return "/ns/" + nsId + "/mcis/" + mcisId + "/vmgroup/" + groupId
+	return "/ns/" + nsId + "/mcis/" + mcisId + "/subgroup/" + groupId
 
 }
 
@@ -168,10 +183,12 @@ func PrintJsonPretty(v interface{}) {
 func GenResourceKey(nsId string, resourceType string, resourceId string) string {
 
 	if resourceType == StrImage ||
+		resourceType == StrCustomImage ||
 		resourceType == StrSSHKey ||
 		resourceType == StrSpec ||
 		resourceType == StrVNet ||
-		resourceType == StrSecurityGroup {
+		resourceType == StrSecurityGroup ||
+		resourceType == StrDataDisk {
 		//resourceType == "subnet" ||
 		//resourceType == "publicIp" ||
 		//resourceType == "vNic" {
@@ -197,6 +214,8 @@ func GenChildResourceKey(nsId string, resourceType string, parentResourceId stri
 type mcirIds struct { // Tumblebug
 	CspImageId           string
 	CspImageName         string
+	CspCustomImageId     string
+	CspCustomImageName   string
 	CspSshKeyName        string
 	CspSpecName          string
 	CspVNetId            string
@@ -207,6 +226,8 @@ type mcirIds struct { // Tumblebug
 	CspPublicIpName      string
 	CspVNicId            string
 	CspVNicName          string
+	CspDataDiskId        string
+	CspDataDiskName      string
 
 	ConnectionName string
 }
@@ -233,6 +254,10 @@ func GetCspResourceId(nsId string, resourceType string, resourceId string) (stri
 		content := mcirIds{}
 		json.Unmarshal([]byte(keyValue.Value), &content)
 		return content.CspImageId, nil
+	case StrCustomImage:
+		content := mcirIds{}
+		json.Unmarshal([]byte(keyValue.Value), &content)
+		return content.CspCustomImageName, nil
 	case StrSSHKey:
 		content := mcirIds{}
 		json.Unmarshal([]byte(keyValue.Value), &content)
@@ -253,6 +278,10 @@ func GetCspResourceId(nsId string, resourceType string, resourceId string) (stri
 		content := mcirIds{}
 		json.Unmarshal([]byte(keyValue.Value), &content)
 		return content.CspSecurityGroupName, nil
+	case StrDataDisk:
+		content := mcirIds{}
+		json.Unmarshal([]byte(keyValue.Value), &content)
+		return content.CspDataDiskName, nil
 	/*
 		case "publicIp":
 			content := mcirIds{}
@@ -910,4 +939,39 @@ func DeleteObjects(key string) error {
 		}
 	}
 	return nil
+}
+
+func CheckElement(a string, list []string) bool {
+	for _, b := range list {
+		if b == a {
+			return true
+		}
+	}
+	return false
+}
+
+const (
+	// Random string generation
+	letterBytes   = "abcdefghijklmnopqrstuvwxyz1234567890"
+	letterIdxBits = 6
+	letterIdxMask = 1<<letterIdxBits - 1
+	letterIdxMax  = 63 / letterIdxBits
+)
+
+/* generate a random string (from CB-MCKS source code) */
+func GenerateNewRandomString(n int) string {
+	randSrc := rand.NewSource(time.Now().UnixNano()) //Random source by nano time
+	b := make([]byte, n)
+	for i, cache, remain := n-1, randSrc.Int63(), letterIdxMax; i >= 0; {
+		if remain == 0 {
+			cache, remain = randSrc.Int63(), letterIdxMax
+		}
+		if idx := int(cache & letterIdxMask); idx < len(letterBytes) {
+			b[i] = letterBytes[idx]
+			i--
+		}
+		cache >>= letterIdxBits
+		remain--
+	}
+	return string(b)
 }

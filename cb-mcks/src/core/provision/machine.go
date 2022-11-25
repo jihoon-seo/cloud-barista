@@ -29,7 +29,17 @@ func (self *Machine) executeSSH(format string, a ...interface{}) (string, error)
 			ServerPort: address,
 		}, command)
 	if err != nil {
-		logger.Warnf("[%s] Failed to run SSH command. (server=%s, cause='%v', command='%s', output='%s')", self.Name, address, err, command, output)
+		if strings.Contains(err.Error(), "handshake failed") {
+			if self.Username == "" {
+				logger.Warnf("[%s] Failed to run SSH command - username is empty (server=%s, key=%s, command='%s', cause='%v')", self.Name, address, len(self.Credential), command, err)
+			} else if self.Credential == "" {
+				logger.Warnf("[%s] Failed to run SSH command - private-key is empty (server=%s, command='%s', cause='%v')", self.Name, address, command, err)
+			} else {
+				logger.Warnf("[%s] Failed to run SSH command. (server=%s, command='%s', cause='%v')", self.Name, address, command, err)
+			}
+		} else {
+			logger.Warnf("[%s] Failed to run SSH command. (server=%s, username=%s, key=%s, command='%s', cause='%v')", self.Name, address, self.Username, len(self.Credential), command, err)
+		}
 	}
 	return output, err
 }
@@ -100,7 +110,7 @@ func (self *Machine) ConnectionTest() error {
 }
 
 /* bootstrap */
-func (self *Machine) bootstrap(networkCni app.NetworkCni, k8sVersion string) error {
+func (self *Machine) bootstrap(clusterInfo *model.Cluster) error {
 
 	//verfiy
 	if self.CSP == "" || self.Region == "" || self.Name == "" || self.PublicIP == "" {
@@ -114,15 +124,28 @@ func (self *Machine) bootstrap(networkCni app.NetworkCni, k8sVersion string) err
 
 	//  - list-up for control-plane
 	if self.Role == app.CONTROL_PLANE {
-		sourceFiles = append(sourceFiles, "haproxy.sh", "k8s-init.sh")
-		if _, err := self.executeSSH("mkdir -p %s/addons/%s", REMOTE_TARGET_PATH, networkCni); err != nil {
-			return errors.New(fmt.Sprintf("Failed to create a addon directory. (node=%s, path='%s')", self.Name, "addons/"+networkCni))
+		sourceFiles = append(sourceFiles, "haproxy.sh")
+		if _, err := self.executeSSH("mkdir -p %s/addons/%s", REMOTE_TARGET_PATH, clusterInfo.NetworkCni); err != nil {
+			return errors.New(fmt.Sprintf("Failed to create a addon directory. (node=%s, path='%s')", self.Name, "addons/"+clusterInfo.NetworkCni))
 		}
-		if networkCni == app.NETWORKCNI_CANAL {
+		if clusterInfo.NetworkCni == app.NETWORKCNI_CANAL {
 			sourceFiles = append(sourceFiles, CNI_CANAL_FILE)
 		} else {
 			sourceFiles = append(sourceFiles, CNI_KILO_CRDS_FILE, CNI_KILO_KUBEADM_FILE, CNI_KILO_FLANNEL_FILE)
 		}
+		if clusterInfo.Etcd == app.ETCD_EXTERNAL {
+			sourceFiles = append(sourceFiles, "etcd-conf.sh", "k8s-init-etcd.sh")
+			if clusterInfo.CpLeader == self.Name {
+				sourceFiles = append(sourceFiles, "etcd-ca.sh")
+			}
+		} else {
+			sourceFiles = append(sourceFiles, "k8s-init.sh")
+		}
+
+		if _, err := self.executeSSH("mkdir -p %s/addons/%s", REMOTE_TARGET_PATH, "nfs"); err != nil {
+			return errors.New(fmt.Sprintf("Failed to create a addon directory. (node=%s, path='%s')", self.Name, "addons/"+"nfs"))
+		}
+		sourceFiles = append(sourceFiles, SC_NFS_RBAC_FILE, SC_NFS_CLASS_FILE, "addons/nfs/deploy_v4.0.16.sh")
 	}
 
 	//  - copy list-up files
@@ -135,10 +158,8 @@ func (self *Machine) bootstrap(networkCni app.NetworkCni, k8sVersion string) err
 	}
 
 	// 2. execute bootstrap.sh
-	if output, err := self.executeSSH(REMOTE_TARGET_PATH+"/bootstrap.sh %s %s %s %s %s", k8sVersion, self.CSP, self.Name, self.PublicIP, networkCni); err != nil {
+	if _, err := self.executeSSH(REMOTE_TARGET_PATH+"/bootstrap.sh %s %s %s %s %s", clusterInfo.Version, self.CSP, self.Name, self.PublicIP, clusterInfo.NetworkCni); err != nil {
 		return errors.New(fmt.Sprintf("Failed to execute bootstrap.sh (node=%s)", self.Name))
-	} else if !strings.Contains(output, "kubectl set on hold") {
-		return errors.New(fmt.Sprintf("Failed to execute bootstrap.sh shell. (node=%s, cause='kubectl not set on hold')", self.Name))
 	}
 
 	return nil

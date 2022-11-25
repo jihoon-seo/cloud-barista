@@ -540,10 +540,15 @@ func testVMHandler(config Config) {
 		NameId:   config.Openstack.Resources.Vm.IID.NameId,
 		SystemId: config.Openstack.Resources.Vm.IID.SystemId,
 	}
+	imageType := irs.PublicImage
+	if config.Openstack.Resources.Vm.ImageType == "MyImage" {
+		imageType = irs.MyImage
+	}
 	vmReqInfo := irs.VMReqInfo{
 		IId: irs.IID{
 			NameId: config.Openstack.Resources.Vm.IID.NameId,
 		},
+		ImageType: imageType,
 		ImageIID: irs.IID{
 			NameId:   config.Openstack.Resources.Vm.ImageIID.NameId,
 			SystemId: config.Openstack.Resources.Vm.ImageIID.SystemId,
@@ -563,6 +568,8 @@ func testVMHandler(config Config) {
 		RootDiskSize:      config.Openstack.Resources.Vm.RootDiskSize,
 		RootDiskType:      config.Openstack.Resources.Vm.RootDiskType,
 		SecurityGroupIIDs: SecurityGroupIIDs,
+		VMUserId:          config.Openstack.Resources.Vm.VMUserId,
+		VMUserPasswd:      config.Openstack.Resources.Vm.VMUserPasswd,
 	}
 
 Loop:
@@ -696,6 +703,10 @@ func getResourceHandler(resourceType string, config Config) (interface{}, error)
 		resourceHandler, err = cloudConnection.CreateVMHandler()
 	case "nlb":
 		resourceHandler, _ = cloudConnection.CreateNLBHandler()
+	case "disk":
+		resourceHandler, err = cloudConnection.CreateDiskHandler()
+	case "myimage":
+		resourceHandler, err = cloudConnection.CreateMyImageHandler()
 	}
 
 	if err != nil {
@@ -882,6 +893,206 @@ Loop:
 	}
 }
 
+func testDiskHandlerListPrint() {
+	cblogger.Info("Test DiskHandler")
+	cblogger.Info("0. Print Menu")
+	cblogger.Info("1. ListDisk()")
+	cblogger.Info("2. GetDisk()")
+	cblogger.Info("3. CreateDisk()")
+	cblogger.Info("4. DeleteDisk()")
+	cblogger.Info("5. ChangeDiskSize()")
+	cblogger.Info("6. AttachDisk()")
+	cblogger.Info("7. DetachDisk()")
+	cblogger.Info("8. Exit")
+}
+
+func testDiskHandler(config Config) {
+	resourceHandler, err := getResourceHandler("disk", config)
+	if err != nil {
+		cblogger.Error(err)
+		return
+	}
+	diskHandler := resourceHandler.(irs.DiskHandler)
+
+	testDiskHandlerListPrint()
+	diskIId := irs.IID{
+		NameId: "volume1",
+	}
+	createDiskReqInfo := irs.DiskInfo{
+		IId: irs.IID{
+			NameId: "volume1",
+		},
+		DiskSize: "1",
+	}
+	delDiskIId := irs.IID{}
+	attachedDisk := irs.IID{
+		NameId: "volume1",
+	}
+	attachVMIId := irs.IID{
+		NameId: "vm-tester",
+	}
+
+Loop:
+	for {
+		var commandNum int
+		inputCnt, err := fmt.Scan(&commandNum)
+		if err != nil {
+			cblogger.Error(err)
+		}
+
+		if inputCnt == 1 {
+			switch commandNum {
+			case 0:
+				testDiskHandlerListPrint()
+			case 1:
+				cblogger.Info("Start ListDisk() ...")
+				if list, err := diskHandler.ListDisk(); err != nil {
+					cblogger.Error(err)
+				} else {
+					spew.Dump(list)
+				}
+				cblogger.Info("Finish ListDisk()")
+			case 2:
+				cblogger.Info("Start GetDisk() ...")
+				if vm, err := diskHandler.GetDisk(diskIId); err != nil {
+					cblogger.Error(err)
+				} else {
+					spew.Dump(vm)
+				}
+				cblogger.Info("Finish GetDisk()")
+			case 3:
+				cblogger.Info("Start CreateDisk() ...")
+				if createInfo, err := diskHandler.CreateDisk(createDiskReqInfo); err != nil {
+					cblogger.Error(err)
+				} else {
+					spew.Dump(createInfo)
+				}
+				cblogger.Info("Finish CreateDisk()")
+			case 4:
+				cblogger.Info("Start DeleteDisk() ...")
+				if vmStatus, err := diskHandler.DeleteDisk(delDiskIId); err != nil {
+					cblogger.Error(err)
+				} else {
+					spew.Dump(vmStatus)
+				}
+				cblogger.Info("Finish DeleteDisk()")
+			case 5:
+				cblogger.Info("Start ChangeDiskSize() ...")
+				if nlbInfo, err := diskHandler.ChangeDiskSize(attachedDisk, "4"); err != nil {
+					cblogger.Error(err)
+				} else {
+					spew.Dump(nlbInfo)
+				}
+				cblogger.Info("Finish ChangeDiskSize()")
+			case 6:
+				cblogger.Info("Start AttachDisk() ...")
+				if info, err := diskHandler.AttachDisk(attachedDisk, attachVMIId); err != nil {
+					cblogger.Error(err)
+				} else {
+					spew.Dump(info)
+				}
+				cblogger.Info("Finish AttachDisk()")
+			case 7:
+				cblogger.Info("Start DetachDisk() ...")
+				if info, err := diskHandler.DetachDisk(attachedDisk, attachVMIId); err != nil {
+					cblogger.Error(err)
+				} else {
+					spew.Dump(info)
+				}
+				cblogger.Info("Finish DetachDisk()")
+			case 8:
+				cblogger.Info("Exit")
+				break Loop
+			}
+		}
+	}
+}
+
+func testMyImageHandlerListPrint() {
+	cblogger.Info("Test MyImageHandler")
+	cblogger.Info("0. Print Menu")
+	cblogger.Info("1. ListMyImage()")
+	cblogger.Info("2. GetMyImage()")
+	cblogger.Info("3. SnapshotVM()")
+	cblogger.Info("4. DeleteMyImage()")
+	cblogger.Info("5. Exit")
+}
+
+func testMyImageHandler(config Config) {
+	resourceHandler, err := getResourceHandler("myimage", config)
+	if err != nil {
+		cblogger.Error(err)
+		return
+	}
+	myimageHandler := resourceHandler.(irs.MyImageHandler)
+
+	testMyImageHandlerListPrint()
+	getimageIId := irs.IID{
+		NameId: "vm-defaultsize-sanp",
+	}
+	imageInfo := irs.MyImageInfo{
+		IId: irs.IID{
+			NameId: "winfire1back",
+		},
+		SourceVM: irs.IID{
+			NameId: "winfire1winfire1winfire1",
+		},
+	}
+	delimageIId := irs.IID{
+		NameId: "vm-defaultsize-sanp",
+	}
+Loop:
+	for {
+		var commandNum int
+		inputCnt, err := fmt.Scan(&commandNum)
+		if err != nil {
+			cblogger.Error(err)
+		}
+
+		if inputCnt == 1 {
+			switch commandNum {
+			case 0:
+				testMyImageHandlerListPrint()
+			case 1:
+				cblogger.Info("Start ListMyImage() ...")
+				if list, err := myimageHandler.ListMyImage(); err != nil {
+					cblogger.Error(err)
+				} else {
+					spew.Dump(list)
+				}
+				cblogger.Info("Finish ListMyImage()")
+			case 2:
+				cblogger.Info("Start GetMyImage() ...")
+				if myimage, err := myimageHandler.GetMyImage(getimageIId); err != nil {
+					cblogger.Error(err)
+				} else {
+					spew.Dump(myimage)
+				}
+				cblogger.Info("Finish GetMyImage()")
+			case 3:
+				cblogger.Info("Start SnapshotVM() ...")
+				if createInfo, err := myimageHandler.SnapshotVM(imageInfo); err != nil {
+					cblogger.Error(err)
+				} else {
+					spew.Dump(createInfo)
+				}
+				cblogger.Info("Finish SnapshotVM()")
+			case 4:
+				cblogger.Info("Start DeleteMyImage() ...")
+				if del, err := myimageHandler.DeleteMyImage(delimageIId); err != nil {
+					cblogger.Error(err)
+				} else {
+					spew.Dump(del)
+				}
+				cblogger.Info("Finish DeleteMyImage()")
+			case 5:
+				cblogger.Info("Exit")
+				break Loop
+			}
+		}
+	}
+}
+
 func main() {
 
 	showTestHandlerInfo()      // ResourceHandler 테스트 정보 출력
@@ -920,6 +1131,12 @@ Loop:
 				testNLBHandler(config)
 				showTestHandlerInfo()
 			case 8:
+				testDiskHandler(config)
+				showTestHandlerInfo()
+			case 9:
+				testMyImageHandler(config)
+				showTestHandlerInfo()
+			case 10:
 				cblogger.Info("Exit Test ResourceHandler Program")
 				break Loop
 			}
@@ -937,7 +1154,9 @@ func showTestHandlerInfo() {
 	cblogger.Info("5. VmSpecHandler")
 	cblogger.Info("6. VmHandler")
 	cblogger.Info("7. NLBHandler")
-	cblogger.Info("8. Exit")
+	cblogger.Info("8. DiskHandler")
+	cblogger.Info("9. MyImageHandler")
+	cblogger.Info("10. Exit")
 	cblogger.Info("==========================================================")
 }
 
@@ -1013,6 +1232,7 @@ type Config struct {
 					NameId   string `yaml:"nameId"`
 					SystemId string `yaml:"systemId"`
 				} `yaml:"ImageIID"`
+				ImageType  string `yaml:"ImageType"`
 				VmSpecName string `yaml:"VmSpecName"`
 				KeyPairIID struct {
 					NameId string `yaml:"nameId"`
@@ -1031,6 +1251,8 @@ type Config struct {
 				} `yaml:"SecurityGroupIIDs"`
 				RootDiskSize string `yaml:"RootDiskSize"`
 				RootDiskType string `yaml:"RootDiskType"`
+				VMUserId     string `yaml:"VMUserId"`
+				VMUserPasswd string `yaml:"VMUserPasswd"`
 			} `yaml:"vm"`
 		} `yaml:"resources"`
 	} `yaml:"openstack"`

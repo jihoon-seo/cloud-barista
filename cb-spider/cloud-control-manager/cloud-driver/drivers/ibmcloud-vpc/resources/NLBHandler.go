@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,7 +39,7 @@ type IbmNLBHandler struct {
 	Ctx            context.Context
 }
 
-//------ NLB Management
+// ------ NLB Management
 func (nlbHandler *IbmNLBHandler) CreateNLB(nlbReqInfo irs.NLBInfo) (irs.NLBInfo, error) {
 	hiscallInfo := GetCallLogScheme(nlbHandler.Region, "NETWORKLOADBALANCE", nlbReqInfo.IId.NameId, "CreateNLB()")
 	start := call.Start()
@@ -75,17 +76,30 @@ func (nlbHandler *IbmNLBHandler) ListNLB() ([]*irs.NLBInfo, error) {
 
 	nlbInfoList := make([]*irs.NLBInfo, len(*nlbList))
 
+	var wait sync.WaitGroup
+	wait.Add(len(*nlbList))
+	var errList []string
+
 	for i, nlb := range *nlbList {
-		info, err := nlbHandler.setterNLB(nlb)
-		if err != nil {
-			getErr := errors.New(fmt.Sprintf("Failed to List NLB. err = %s", err.Error()))
-			cblogger.Error(getErr.Error())
-			LoggingError(hiscallInfo, getErr)
-			return nil, getErr
-		}
-		nlbInfoList[i] = info
+		go func() {
+			defer wait.Done()
+			info, getErr := nlbHandler.setterNLB(nlb)
+			if getErr != nil {
+				cblogger.Error(getErr.Error())
+				LoggingError(hiscallInfo, getErr)
+				errList = append(errList, getErr.Error())
+			}
+			nlbInfoList[i] = info
+		}()
 	}
+	wait.Wait()
 	LoggingInfo(hiscallInfo, start)
+
+	if len(errList) > 0 {
+		errList = append([]string{"Failed to List NLB. err = "}, errList...)
+		return nil, errors.New(strings.Join(errList, "\n\t"))
+	}
+
 	return nlbInfoList, nil
 }
 func (nlbHandler *IbmNLBHandler) GetNLB(nlbIID irs.IID) (irs.NLBInfo, error) {
@@ -112,8 +126,8 @@ func (nlbHandler *IbmNLBHandler) DeleteNLB(nlbIID irs.IID) (bool, error) {
 	hiscallInfo := GetCallLogScheme(nlbHandler.Region, "NETWORKLOADBALANCE", nlbIID.NameId, "DeleteNLB()")
 	start := call.Start()
 
-	_,err := nlbHandler.cleanerNLB(nlbIID)
-	if err != nil{
+	_, err := nlbHandler.cleanerNLB(nlbIID)
+	if err != nil {
 		delErr := errors.New(fmt.Sprintf("Failed to Delete NLB. err = %s", err.Error()))
 		cblogger.Error(delErr.Error())
 		LoggingError(hiscallInfo, delErr)
@@ -123,7 +137,7 @@ func (nlbHandler *IbmNLBHandler) DeleteNLB(nlbIID irs.IID) (bool, error) {
 	return true, nil
 }
 
-//------ Frontend Control
+// ------ Frontend Control
 func (nlbHandler *IbmNLBHandler) ChangeListener(nlbIID irs.IID, listener irs.ListenerInfo) (irs.ListenerInfo, error) {
 	hiscallInfo := GetCallLogScheme(nlbHandler.Region, "NETWORKLOADBALANCE", nlbIID.NameId, "ChangeListener()")
 	start := call.Start()
@@ -209,7 +223,7 @@ func (nlbHandler *IbmNLBHandler) ChangeListener(nlbIID irs.IID, listener irs.Lis
 	return info.Listener, err
 }
 
-//------ Backend Control
+// ------ Backend Control
 func (nlbHandler *IbmNLBHandler) ChangeVMGroupInfo(nlbIID irs.IID, vmGroup irs.VMGroupInfo) (irs.VMGroupInfo, error) {
 	hiscallInfo := GetCallLogScheme(nlbHandler.Region, "NETWORKLOADBALANCE", nlbIID.NameId, "ChangeVMGroupInfo()")
 	start := call.Start()
@@ -242,7 +256,7 @@ func (nlbHandler *IbmNLBHandler) ChangeVMGroupInfo(nlbIID irs.IID, vmGroup irs.V
 		return irs.VMGroupInfo{}, changeErr
 	}
 
-	vmGroupPort, err := nlbHandler.getPoolPort(updateNLBId,updatePoolId)
+	vmGroupPort, err := nlbHandler.getPoolPort(updateNLBId, updatePoolId)
 
 	if err != nil {
 		changeErr := errors.New(fmt.Sprintf("Failed to Change VMGroupInfo. err = %s", err.Error()))
@@ -575,7 +589,7 @@ func (nlbHandler *IbmNLBHandler) GetVMGroupHealthInfo(nlbIID irs.IID) (irs.Healt
 		LoggingError(hiscallInfo, changeErr)
 		return irs.HealthInfo{}, changeErr
 	}
-	info,err:=nlbHandler.getHealthInfoByMembers(members.Members)
+	info, err := nlbHandler.getHealthInfoByMembers(members.Members)
 	if err != nil {
 		changeErr := errors.New(fmt.Sprintf("Failed to Get VMGroupHealthInfo. err = %s", err.Error()))
 		cblogger.Error(changeErr.Error())
@@ -720,31 +734,71 @@ func (nlbHandler *IbmNLBHandler) setterNLB(nlb vpcv1.LoadBalancer) (*irs.NLBInfo
 		nlbInfo.Type = string(NLBInternalType)
 	}
 
-	vpcIId, err := nlbHandler.getVPCIID(nlb)
-	if err != nil {
-		return nil, err
-	}
-	nlbInfo.VpcIID = vpcIId
+	var apiCallFunctions []func(rawNlb vpcv1.LoadBalancer, irsNlb *irs.NLBInfo) error
+	// define and register get VPC IID
+	apiCallFunctions = append(apiCallFunctions, func(nlbInner vpcv1.LoadBalancer, nlbInfoInner *irs.NLBInfo) error {
+		vpcIId, err := nlbHandler.getVPCIID(nlbInner)
+		if err != nil {
+			return err
+		}
+		nlbInfoInner.VpcIID = vpcIId
+		return nil
+	})
+	// define and register get VM Group
+	apiCallFunctions = append(apiCallFunctions, func(nlbInner vpcv1.LoadBalancer, nlbInfoInner *irs.NLBInfo) error {
+		vmGroup, err := nlbHandler.getVMGroup(nlb)
+		if err != nil {
+			return err
+		}
+		nlbInfo.VMGroup = vmGroup
+		return nil
+	})
+	// define and register get Listener
+	apiCallFunctions = append(apiCallFunctions, func(nlbInner vpcv1.LoadBalancer, nlbInfoInner *irs.NLBInfo) error {
+		listenerInfo, err := nlbHandler.getListenerInfo(nlb)
+		if err != nil {
+			return err
+		}
+		nlbInfo.Listener = listenerInfo
+		return nil
+	})
+	// define and register get HealthChecker
+	apiCallFunctions = append(apiCallFunctions, func(nlbInner vpcv1.LoadBalancer, nlbInfoInner *irs.NLBInfo) error {
+		healthCheckerInfo, err := nlbHandler.getHealthCheckerInfo(nlb)
+		if err != nil {
+			return err
+		}
+		nlbInfo.HealthChecker = healthCheckerInfo
+		return nil
+	})
 
-	vmGroup, err := nlbHandler.getVMGroup(nlb)
-	if err != nil {
-		return nil, err
-	}
-	nlbInfo.VMGroup = vmGroup
+	// prepare api call
+	var wait sync.WaitGroup
+	wait.Add(len(apiCallFunctions))
+	var errList []string
 
-	listenerInfo, err := nlbHandler.getListenerInfo(nlb)
-	if err != nil {
-		return nil, err
+	// define api call done behaviour
+	callAndWaitGroup := func(call func(rawNlb vpcv1.LoadBalancer, irsNlb *irs.NLBInfo) error) {
+		defer wait.Done()
+		if err := call(nlb, &nlbInfo); err != nil {
+			errList = append(errList, err.Error())
+		}
 	}
-	nlbInfo.Listener = listenerInfo
+
+	// asynchronously call registered apis
+	for _, apiCallFunction := range apiCallFunctions {
+		go callAndWaitGroup(apiCallFunction)
+	}
+
+	// wait for all registered api call is done
+	wait.Wait()
+
+	// return all errors if occurs
+	if len(errList) > 0 {
+		return &irs.NLBInfo{}, errors.New(strings.Join(errList, "\n\t"))
+	}
 
 	nlbInfo.CreatedTime = time.Time(*nlb.CreatedAt)
-
-	healthCheckerInfo, err := nlbHandler.getHealthCheckerInfo(nlb)
-	if err != nil {
-		return nil, err
-	}
-	nlbInfo.HealthChecker = healthCheckerInfo
 
 	return &nlbInfo, nil
 }
@@ -914,7 +968,6 @@ func (nlbHandler *IbmNLBHandler) getCreatePoolOptions(nlbReqInfo irs.NLBInfo) ([
 	return poolArray, nil
 }
 
-//
 func (nlbHandler *IbmNLBHandler) convertCBVMGroupToIbmPoolMember(vmGroup irs.VMGroupInfo) ([]vpcv1.LoadBalancerPoolMemberPrototype, error) {
 	vms := *vmGroup.VMs
 	memberPort, err := strconv.Atoi(vmGroup.Port)
@@ -985,7 +1038,7 @@ func convertCBHealthToIbmHealth(healthChecker irs.HealthCheckerInfo) (vpcv1.Load
 	}
 
 	HealthPort64 := int64(HealthPort)
-	opts:= vpcv1.LoadBalancerPoolHealthMonitorPrototype{
+	opts := vpcv1.LoadBalancerPoolHealthMonitorPrototype{
 		Type:       core.StringPtr(HealthProtocol),
 		Delay:      core.Int64Ptr(HealthDelay),
 		MaxRetries: core.Int64Ptr(HealthMaxRetries),
@@ -1080,7 +1133,7 @@ func (nlbHandler *IbmNLBHandler) createNLB(nlbReqInfo irs.NLBInfo) (vpcv1.LoadBa
 	if err != nil {
 		return vpcv1.LoadBalancer{}, err
 	}
-	_,err = nlbHandler.checkUpdatableNLB(*nlb.ID)
+	_, err = nlbHandler.checkUpdatableNLB(*nlb.ID)
 	if err != nil {
 		return vpcv1.LoadBalancer{}, err
 	}
@@ -1260,7 +1313,7 @@ func (nlbHandler *IbmNLBHandler) getRawNLBList() (*[]vpcv1.LoadBalancer, error) 
 	return &list, nil
 }
 
-func (nlbHandler *IbmNLBHandler) cleanerNLB(nlbIID irs.IID) (bool, error){
+func (nlbHandler *IbmNLBHandler) cleanerNLB(nlbIID irs.IID) (bool, error) {
 	// Exist?
 	exist, err := nlbHandler.existNLBByName(nlbIID.NameId)
 	if err != nil {
@@ -1280,7 +1333,7 @@ func (nlbHandler *IbmNLBHandler) cleanerNLB(nlbIID irs.IID) (bool, error){
 	if err != nil {
 		return false, err
 	}
-	_,err = nlbHandler.waitDeletedNLB(nlbId)
+	_, err = nlbHandler.waitDeletedNLB(nlbId)
 	if err != nil {
 		return false, err
 	}
@@ -1314,10 +1367,10 @@ func (nlbHandler *IbmNLBHandler) waitDeletedNLB(nlbId string) (bool, error) {
 
 func (nlbHandler *IbmNLBHandler) getHealthInfoByMembers(members []vpcv1.LoadBalancerPoolMember) (irs.HealthInfo, error) {
 	var allVMS *[]vpcv1.Instance
-	var healthyVMs []irs.IID
-	var unHealthyVMs []irs.IID
+	healthyVMs := make([]irs.IID, 0)
+	unHealthyVMs := make([]irs.IID, 0)
 	vmIIDs := make([]irs.IID, len(members))
-	for i, member := range members{
+	for i, member := range members {
 		memberTarget, err := getMemberTarget(member)
 		if err != nil {
 			return irs.HealthInfo{}, err
@@ -1330,7 +1383,7 @@ func (nlbHandler *IbmNLBHandler) getHealthInfoByMembers(members []vpcv1.LoadBala
 			if err != nil {
 				return irs.HealthInfo{}, err
 			}
-			vmIIDs[i] =irs.IID{
+			vmIIDs[i] = irs.IID{
 				NameId:   *rawVM.Name,
 				SystemId: *rawVM.ID,
 			}
@@ -1352,7 +1405,7 @@ func (nlbHandler *IbmNLBHandler) getHealthInfoByMembers(members []vpcv1.LoadBala
 		}
 		if checkVmGroupHealth(*member.Health) {
 			healthyVMs = append(healthyVMs, vmIIDs[i])
-		}else{
+		} else {
 			unHealthyVMs = append(unHealthyVMs, vmIIDs[i])
 		}
 	}
@@ -1363,7 +1416,7 @@ func (nlbHandler *IbmNLBHandler) getHealthInfoByMembers(members []vpcv1.LoadBala
 	}, nil
 }
 
-func (nlbHandler *IbmNLBHandler) getPoolPort(nlbId string, poolId string)(int, error){
+func (nlbHandler *IbmNLBHandler) getPoolPort(nlbId string, poolId string) (int, error) {
 	poolOption := vpcv1.GetLoadBalancerPoolOptions{}
 	poolOption.SetLoadBalancerID(nlbId)
 	poolOption.SetID(poolId)
@@ -1390,11 +1443,10 @@ func (nlbHandler *IbmNLBHandler) getPoolPort(nlbId string, poolId string)(int, e
 	return vmGroupPort, nil
 }
 
-
 func (nlbHandler *IbmNLBHandler) getAllVMIIDsByMembers(members []vpcv1.LoadBalancerPoolMember) ([]irs.IID, error) {
 	var allVMS *[]vpcv1.Instance
 	vmIIDs := make([]irs.IID, len(members))
-	for i, member := range members{
+	for i, member := range members {
 		memberTarget, err := getMemberTarget(member)
 		if err != nil {
 			return nil, err
@@ -1407,7 +1459,7 @@ func (nlbHandler *IbmNLBHandler) getAllVMIIDsByMembers(members []vpcv1.LoadBalan
 			if err != nil {
 				return nil, err
 			}
-			vmIIDs[i] =irs.IID{
+			vmIIDs[i] = irs.IID{
 				NameId:   *rawVM.Name,
 				SystemId: *rawVM.ID,
 			}

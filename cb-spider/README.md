@@ -37,14 +37,14 @@ If you have any difficulties in using Cloud-Barista, please let us know.
 #### 1. 실행 환경
 
 - ##### 공식환경
-  - OS: Ubuntu 18.04
-  - Container: Docker 19.03
-  - Build: Go 1.16
-- ##### 시험환경
-  - OS: Ubuntu 18.04, Ubuntu 20.04, Debian 10.6, macOS Catalina 10.15, Android 8.1 등
-  - Container: latest Docker
-  - Build: latest Go
+  - OS: Ubuntu 22.04
+  - Build: Go 1.19
+  - Container: Docker v19.03
 
+- ##### 시험환경
+  - OS: Ubuntu 18.04, Ubuntu 20.04, Ubuntu 22.04, Debian 10.6, macOS Catalina 10.15, Android 8.1 등
+  - Build: Go 1.16, Go 1.18, Go 1.19
+  - Container: Docker v19.03, Docker v20.10
 
 #### 2. 실행 방법
 
@@ -55,17 +55,17 @@ If you have any difficulties in using Cloud-Barista, please let us know.
 
 #### 3. 제공 자원
 
-  | Provider(CloudOS) | VM Image List/Get | VM Spec List/Get| VPC/Subnet | Security Group | VM KeyPair| VM   | Network LB  |
-  |:-------------:|:-------------:|:-------------:|:-------------:|:-------------:|:-------------:|:-------------:|:-------------:|
-  | AWS           | O          | O          | O          | O          | O          | O          | O          |
-  | Azure         | O          | O          | O          | O          | O          | O          | ∝-Test       |
-  | GCP           | O          | O          | O          | O          | O          | O          | ∝-Test       |
-  | Alibaba       | O          | O          | O          | O          | O          | O          | ∝-Test       |
-  | Tencent       | O          | O          | O          | O          | O          | O          | O          |
-  | IBM           | O          | O          | O          | O          | O          | O          | ∝-Test       |
-  | OpenStack     | O          | O          | O          | O          | O          | O          | ∝-Test       |
-  | Cloudit       | O          | O          | O(💬)          | O          | O          | O          | ∝-Test       |
-  | Docker (PoC)  | O          | -          | -          | -          | -          | O          | -          |
+  | Provider | Image Info | VMSpec Info| VPC/Subnet | SecurityGroup | VM KeyPair| VM   | NLB/Disk<br>MyImage | K8S |
+  |:-------------:|:-------------:|:-------------:|:-------------:|:-------------:|:-------------:|:-------------:|:-------------:|:-------------:|
+  | AWS           | O          | O          | O          | O          | O          | O          | O          |Coming Soon|
+  | Azure         | O          | O          | O          | O          | O          | O          | O          | O          |
+  | GCP           | O          | O          | O          | O          | O          | O          | O          |Coming Soon|
+  | Alibaba       | O          | O          | O          | O          | O          | O          | O          | O          |
+  | Tencent       | O          | O          | O          | O          | O          | O          | O          | O          |
+  | IBM           | O          | O          | O          | O          | O          | O          | O          |Coming Soon|
+  | OpenStack     | O          | O          | O          | O          | O          | O          | O          | - |
+  | Cloudit       | O          | O          | O(💬)      | O          | O          | O          | O          | - |
+  | Docker (PoC)  | O          | -          | -          | -          | -          | O          | -          | - |
 
     💬 특이사항: 
         - VPC: 단일 VPC 생성 제공 (두개 이상 VPC 생성 불가)
@@ -75,7 +75,8 @@ If you have any difficulties in using Cloud-Barista, please let us know.
             - 이미 사용 중인 CIDR 요청시 오류 메시지에 사용 가능한 CIDR 목록 반환
 
 #### 4. VM 계정
-- CB Spider VM User: cb-user
+- Ubuntu, Debian VM User: cb-user
+- Windows VM User: Administrator
 
 
 #### 5. 활용 방법

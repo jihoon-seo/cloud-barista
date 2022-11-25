@@ -23,6 +23,8 @@ import (
 	//ec2drv "github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/elbv2"
+
+	"errors"
 )
 
 //type AwsCloudConnection struct{}
@@ -41,6 +43,11 @@ type AwsCloudConnection struct {
 
 	//NLBClient *elb.ELB
 	NLBClient *elbv2.ELBV2
+
+	DiskClient    *ec2.EC2
+	MyImageClient *ec2.EC2
+
+	AnyCallClient *ec2.EC2
 }
 
 var cblogger *logrus.Logger
@@ -114,3 +121,24 @@ func (cloudConn *AwsCloudConnection) CreateNLBHandler() (irs.NLBHandler, error) 
 	handler := ars.AwsNLBHandler{cloudConn.Region, cloudConn.NLBClient, cloudConn.VMClient}
 	return &handler, nil
 }
+
+func (cloudConn *AwsCloudConnection) CreateDiskHandler() (irs.DiskHandler, error) {
+	handler := ars.AwsDiskHandler{cloudConn.Region, cloudConn.DiskClient}
+	return &handler, nil
+}
+
+
+func (cloudConn *AwsCloudConnection) CreateMyImageHandler() (irs.MyImageHandler, error) {
+	handler := ars.AwsMyImageHandler{cloudConn.Region, cloudConn.MyImageClient}
+	return &handler, nil
+}
+
+func (cloudConn *AwsCloudConnection) CreateClusterHandler() (irs.ClusterHandler, error) {
+        return nil, errors.New("AWS Driver: not implemented")
+}
+
+func (cloudConn *AwsCloudConnection) CreateAnyCallHandler() (irs.AnyCallHandler, error) {
+	handler := ars.AwsAnyCallHandler{cloudConn.Region, cloudConn.CredentialInfo, cloudConn.AnyCallClient}
+        return &handler, nil
+}
+

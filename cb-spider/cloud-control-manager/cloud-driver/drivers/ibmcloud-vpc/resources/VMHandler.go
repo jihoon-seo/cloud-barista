@@ -6,16 +6,20 @@ import (
 	"errors"
 	"fmt"
 	"github.com/IBM/go-sdk-core/v5/core"
+	vpcv0230 "github.com/IBM/vpc-go-sdk/0.23.0/vpcv1"
 	"github.com/IBM/vpc-go-sdk/vpcv1"
 	call "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/call-log"
+	cdcom "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/common"
 	idrv "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/interfaces"
 	irs "github.com/cloud-barista/cb-spider/cloud-control-manager/cloud-driver/interfaces/resources"
 	"io/ioutil"
 	"math/rand"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,6 +27,7 @@ type IbmVMHandler struct {
 	CredentialInfo idrv.CredentialInfo
 	Region         idrv.RegionInfo
 	VpcService     *vpcv1.VpcV1
+	VpcService0230 *vpcv0230.VpcV1
 	Ctx            context.Context
 }
 
@@ -53,13 +58,52 @@ func (vmHandler *IbmVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, err
 		return irs.VMInfo{}, createErr
 	}
 	// 1-2. Setup Req Resource IID
-	image, err := getRawImage(vmReqInfo.ImageIID, vmHandler.VpcService, vmHandler.Ctx)
-	if err != nil {
-		createErr := errors.New(fmt.Sprintf("Failed to Create VM. err = %s", err.Error()))
-		cblogger.Error(createErr.Error())
-		LoggingError(hiscallInfo, createErr)
-		return irs.VMInfo{}, createErr
+	var image vpcv1.Image
+	var myImage irs.MyImageInfo
+	var isWindows bool
+	if vmReqInfo.ImageType == irs.MyImage {
+		myImageHandler := IbmMyImageHandler{
+			CredentialInfo: vmHandler.CredentialInfo,
+			Region:         vmHandler.Region,
+			VpcService:     vmHandler.VpcService,
+			Ctx:            vmHandler.Ctx,
+		}
+		var getMyImageErr error
+		myImage, getMyImageErr = myImageHandler.GetMyImage(vmReqInfo.ImageIID)
+		if getMyImageErr != nil {
+			createErr := errors.New(fmt.Sprintf("Failed to Create VM. err = %s", getMyImageErr.Error()))
+			cblogger.Error(createErr.Error())
+			LoggingError(hiscallInfo, createErr)
+			return irs.VMInfo{}, createErr
+		}
+		if myImage.Status != irs.MyImageAvailable {
+			createErr := errors.New("Failed to Create VM. err = Source Image status is not Available")
+			cblogger.Error(createErr.Error())
+			LoggingError(hiscallInfo, createErr)
+			return irs.VMInfo{}, createErr
+		}
+		rawSnapshot, _, getRawSnapshotErr := myImageHandler.VpcService.GetSnapshotWithContext(myImageHandler.Ctx, &vpcv1.GetSnapshotOptions{ID: &myImage.IId.SystemId})
+		if getRawSnapshotErr != nil {
+			createErr := errors.New("Failed to Create VM. err = Cannot get Snapshot Detail of Source MyImage")
+			cblogger.Error(createErr.Error())
+			LoggingError(hiscallInfo, createErr)
+			return irs.VMInfo{}, createErr
+		}
+
+		isWindows = strings.Contains(strings.ToLower(*rawSnapshot.OperatingSystem.Name), "windows")
+	} else {
+		var getImageErr error
+		image, getImageErr = getRawImage(vmReqInfo.ImageIID, vmHandler.VpcService, vmHandler.Ctx)
+		if getImageErr != nil {
+			createErr := errors.New(fmt.Sprintf("Failed to Create VM. err = %s", getImageErr.Error()))
+			cblogger.Error(createErr.Error())
+			LoggingError(hiscallInfo, createErr)
+			return irs.VMInfo{}, createErr
+		}
+
+		isWindows = strings.Contains(strings.ToLower(*image.OperatingSystem.Name), "windows")
 	}
+
 	vpc, err := getRawVPC(vmReqInfo.VpcIID, vmHandler.VpcService, vmHandler.Ctx)
 	if err != nil {
 		createErr := errors.New(fmt.Sprintf("Failed to Create VM. err = %s", err.Error()))
@@ -110,47 +154,153 @@ func (vmHandler *IbmVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, err
 	}
 
 	// 1-3. cloud-init data set
-	rootPath := os.Getenv("CBSPIDER_ROOT")
-	fileDataCloudInit, err := ioutil.ReadFile(rootPath + CBCloudInitFilePath)
-	if err != nil {
-		createErr := errors.New(fmt.Sprintf("Failed to Create VM. err = %s", err.Error()))
-		cblogger.Error(createErr.Error())
-		LoggingError(hiscallInfo, createErr)
-		return irs.VMInfo{}, createErr
+	var userData string
+	if isWindows {
+		userId := vmReqInfo.VMUserId
+		if userId == "" {
+			userId = "Administrator"
+		}
+
+		pwValidErr := cdcom.ValidateWindowsPassword(vmReqInfo.VMUserPasswd)
+		if pwValidErr != nil {
+			return irs.VMInfo{}, pwValidErr
+		}
+
+		userData = fmt.Sprintf("#ps1_sysnative\nnet user \"%s\" \"%s\"", userId, vmReqInfo.VMUserPasswd)
+	} else {
+		rootPath := os.Getenv("CBSPIDER_ROOT")
+		fileDataCloudInit, err := ioutil.ReadFile(rootPath + CBCloudInitFilePath)
+		if err != nil {
+			createErr := errors.New(fmt.Sprintf("Failed to Create VM. err = %s", err.Error()))
+			cblogger.Error(createErr.Error())
+			LoggingError(hiscallInfo, createErr)
+			return irs.VMInfo{}, createErr
+		}
+		userData = string(fileDataCloudInit)
+		userData = strings.ReplaceAll(userData, "{{username}}", CBDefaultVmUserName)
 	}
-	userData := string(fileDataCloudInit)
-	userData = strings.ReplaceAll(userData, "{{username}}", CBDefaultVmUserName)
 
 	// 2.Create VM
 	// TODO : UserData cloudInit
-	createInstanceOptions := &vpcv1.CreateInstanceOptions{}
-	createInstanceOptions.SetInstancePrototype(&vpcv1.InstancePrototype{
-		Name: &vmReqInfo.IId.NameId,
-		Image: &vpcv1.ImageIdentity{
-			ID: image.ID,
-		},
-		Profile: &vpcv1.InstanceProfileIdentity{
-			Name: spec.Name,
-		},
-		Zone: &vpcv1.ZoneIdentity{
-			Name: &vmHandler.Region.Zone,
-		},
-		PrimaryNetworkInterface: &vpcv1.NetworkInterfacePrototype{
-			Subnet: &vpcv1.SubnetIdentity{
-				ID: vpcSubnet.ID,
+	createInstanceOptions := &vpcv0230.CreateInstanceOptions{}
+
+	var existingDataVolumeAttachments []vpcv0230.VolumeAttachmentPrototypeInstanceContext
+	for _, dataVolumeIID := range vmReqInfo.DataDiskIIDs {
+		rawDisk, getRawDiskErr := getRawDisk(vmHandler.VpcService, vmHandler.Ctx, dataVolumeIID)
+		if getRawDiskErr == nil {
+			existingDataVolumeAttachments = append(existingDataVolumeAttachments, vpcv0230.VolumeAttachmentPrototypeInstanceContext{
+				Volume: &vpcv0230.VolumeAttachmentVolumePrototypeInstanceContextVolumeIdentity{ID: rawDisk.ID},
+			})
+		}
+	}
+
+	if vmReqInfo.ImageType == irs.MyImage {
+		snapshotList, _, listSnapshotErr := vmHandler.VpcService.ListSnapshotsWithContext(vmHandler.Ctx, &vpcv1.ListSnapshotsOptions{})
+		if listSnapshotErr != nil {
+			return irs.VMInfo{}, errors.New(fmt.Sprintf("Failed to Get MyImage. err = %s", listSnapshotErr.Error()))
+		}
+
+		var associatedSnapshots []vpcv1.Snapshot
+		for _, snapshot := range snapshotList.Snapshots {
+			if strings.Split(*snapshot.Name, DEV)[0] == myImage.IId.NameId {
+				associatedSnapshots = append(associatedSnapshots, snapshot)
+			}
+		}
+
+		sort.Slice(associatedSnapshots, func(i, j int) bool {
+			return *associatedSnapshots[i].Name < *associatedSnapshots[j].Name
+		})
+
+		var dataVolumeAttachments []vpcv0230.VolumeAttachmentPrototypeInstanceContext
+		var bootVolumeAttachment vpcv0230.VolumeAttachmentPrototypeInstanceBySourceSnapshotContext
+		for _, snapshot := range associatedSnapshots {
+			sourceVolume, _, getSourceVolumeErr := vmHandler.VpcService0230.GetVolumeWithContext(vmHandler.Ctx, &vpcv0230.GetVolumeOptions{ID: snapshot.SourceVolume.ID})
+			if getSourceVolumeErr != nil {
+				return irs.VMInfo{}, errors.New(fmt.Sprintf("Failed to Get Source Volume. err = %s", getSourceVolumeErr.Error()))
+			}
+
+			volumeName := fmt.Sprintf("%s%s%s", vmReqInfo.IId.NameId, DEV, strings.Split(*snapshot.Name, DEV)[1])
+			if *snapshot.Bootable {
+				bootVolumeAttachment = vpcv0230.VolumeAttachmentPrototypeInstanceBySourceSnapshotContext{
+					Volume: &vpcv0230.VolumePrototypeInstanceBySourceSnapshotContext{
+						Name:           core.StringPtr(volumeName),
+						Profile:        &vpcv0230.VolumeProfileIdentityByName{Name: sourceVolume.Profile.Name},
+						Capacity:       sourceVolume.Capacity,
+						SourceSnapshot: &vpcv0230.SnapshotIdentityByID{ID: snapshot.ID},
+					},
+				}
+			} else {
+				model := vpcv0230.VolumeAttachmentPrototypeInstanceContext{
+					Volume: &vpcv0230.VolumeAttachmentVolumePrototypeInstanceContextVolumePrototypeInstanceContextVolumePrototypeInstanceContextVolumeBySourceSnapshot{
+						Name:           core.StringPtr(volumeName),
+						Profile:        &vpcv0230.VolumeProfileIdentityByName{Name: sourceVolume.Profile.Name},
+						Capacity:       sourceVolume.Capacity,
+						SourceSnapshot: &vpcv0230.SnapshotIdentityByID{ID: snapshot.ID},
+					},
+				}
+
+				dataVolumeAttachments = append(dataVolumeAttachments, model)
+			}
+		}
+
+		dataVolumeAttachments = append(dataVolumeAttachments, existingDataVolumeAttachments...)
+
+		createInstanceOptions.SetInstancePrototype(&vpcv0230.InstancePrototypeInstanceBySourceSnapshot{
+			Name:                 &vmReqInfo.IId.NameId,
+			BootVolumeAttachment: &bootVolumeAttachment,
+			VolumeAttachments:    dataVolumeAttachments,
+			Profile: &vpcv0230.InstanceProfileIdentity{
+				Name: spec.Name,
 			},
-		},
-		Keys: []vpcv1.KeyIdentityIntf{
-			&vpcv1.KeyIdentity{
-				ID: key.ID,
+			Zone: &vpcv0230.ZoneIdentity{
+				Name: &vmHandler.Region.Zone,
 			},
-		},
-		VPC: &vpcv1.VPCIdentity{
-			ID: vpc.ID,
-		},
-		UserData: &userData,
-	})
-	createInstance, _, err := vmHandler.VpcService.CreateInstanceWithContext(vmHandler.Ctx, createInstanceOptions)
+			PrimaryNetworkInterface: &vpcv0230.NetworkInterfacePrototype{
+				Subnet: &vpcv0230.SubnetIdentity{
+					ID: vpcSubnet.ID,
+				},
+			},
+			Keys: []vpcv0230.KeyIdentityIntf{
+				&vpcv0230.KeyIdentity{
+					ID: key.ID,
+				},
+			},
+			VPC: &vpcv0230.VPCIdentity{
+				ID: vpc.ID,
+			},
+			UserData: &userData,
+		})
+	} else {
+		createInstanceOptions.SetInstancePrototype(&vpcv0230.InstancePrototype{
+			Name: &vmReqInfo.IId.NameId,
+			Image: &vpcv0230.ImageIdentity{
+				ID: image.ID,
+			},
+			Profile: &vpcv0230.InstanceProfileIdentity{
+				Name: spec.Name,
+			},
+			Zone: &vpcv0230.ZoneIdentity{
+				Name: &vmHandler.Region.Zone,
+			},
+			PrimaryNetworkInterface: &vpcv0230.NetworkInterfacePrototype{
+				Subnet: &vpcv0230.SubnetIdentity{
+					ID: vpcSubnet.ID,
+				},
+			},
+			Keys: []vpcv0230.KeyIdentityIntf{
+				&vpcv0230.KeyIdentity{
+					ID: key.ID,
+				},
+			},
+			VPC: &vpcv0230.VPCIdentity{
+				ID: vpc.ID,
+			},
+			UserData:          &userData,
+			VolumeAttachments: existingDataVolumeAttachments,
+		})
+	}
+
+	createInstance, _, err := vmHandler.VpcService0230.CreateInstanceWithContext(vmHandler.Ctx, createInstanceOptions)
 	if err != nil {
 		createErr := errors.New(fmt.Sprintf("Failed to Create VM. err = %s", err.Error()))
 		cblogger.Error(createErr.Error())
@@ -318,6 +468,9 @@ func (vmHandler *IbmVMHandler) StartVM(vmReqInfo irs.VMReqInfo) (irs.VMInfo, err
 				return irs.VMInfo{}, createErr
 			}
 			LoggingInfo(hiscallInfo, start)
+			if isWindows {
+				finalInstanceInfo.VMUserPasswd = vmReqInfo.VMUserPasswd
+			}
 			return finalInstanceInfo, nil
 		}
 		curRetryCnt++
@@ -578,18 +731,11 @@ func (vmHandler *IbmVMHandler) ListVM() ([]*irs.VMInfo, error) {
 		LoggingError(hiscallInfo, getErr)
 		return nil, getErr
 	}
-	var vmList []*irs.VMInfo
+
+	var vmInstanceList []vpcv1.Instance
+
 	for {
-		for _, instance := range instances.Instances {
-			vmInfo, err := vmHandler.setVmInfo(instance)
-			if err != nil {
-				getErr := errors.New(fmt.Sprintf("Failed to Get VMList. err = %s", err.Error()))
-				cblogger.Error(getErr.Error())
-				LoggingError(hiscallInfo, getErr)
-				return nil, getErr
-			}
-			vmList = append(vmList, &vmInfo)
-		}
+		vmInstanceList = append(vmInstanceList, instances.Instances...)
 		nextstr, _ := getVMNextHref(instances.Next)
 		if nextstr != "" {
 			listVpcsOptions2 := &vpcv1.ListInstancesOptions{
@@ -606,6 +752,14 @@ func (vmHandler *IbmVMHandler) ListVM() ([]*irs.VMInfo, error) {
 		} else {
 			break
 		}
+	}
+
+	vmList, err := vmHandler.setVMList(vmInstanceList)
+	if err != nil {
+		getErr := errors.New(fmt.Sprintf("Failed to Get VMList. err = %s", err.Error()))
+		cblogger.Error(getErr.Error())
+		LoggingError(hiscallInfo, getErr)
+		return nil, getErr
 	}
 	LoggingInfo(hiscallInfo, start)
 	return vmList, nil
@@ -979,7 +1133,119 @@ func removeFloatingIps(instance vpcv1.Instance, vpcService *vpcv1.VpcV1, ctx con
 	return nil
 }
 
+func (vmHandler *IbmVMHandler) getKeyIId(instance vpcv1.Instance) irs.IID {
+	// KeyGet
+	var instanceId = ""
+	if instance.ID != nil {
+		instanceId = *instance.ID
+	} else {
+		return irs.IID{}
+	}
+	instanceInitializationOptions := &vpcv1.GetInstanceInitializationOptions{}
+	instanceInitializationOptions.SetID(instanceId)
+	initData, _, err := vmHandler.VpcService.GetInstanceInitializationWithContext(vmHandler.Ctx, instanceInitializationOptions)
+	if err == nil && initData.Keys != nil && len(initData.Keys) > 0 {
+		jsonInitDataBytes, err := json.Marshal(initData.Keys[0])
+		if err == nil {
+			var keyRef vpcv1.KeyReferenceInstanceInitializationContextKeyReference
+			err = json.Unmarshal(jsonInitDataBytes, &keyRef)
+			if err == nil && keyRef.ID != nil && keyRef.Name != nil {
+				return irs.IID{
+					NameId:   *keyRef.Name,
+					SystemId: *keyRef.ID,
+				}
+			}
+		}
+	}
+	return irs.IID{}
+}
+
+type vmNetworkInfo struct {
+	NetworkInterface  string
+	PublicIP          string
+	SSHAccessPoint    string
+	SecurityGroupIIds []irs.IID
+}
+
+func (vmHandler *IbmVMHandler) getBootVolumeInfo(instance vpcv1.Instance) (rootDiskSize string) {
+	var bootVolumeId = ""
+	if instance.BootVolumeAttachment != nil && instance.BootVolumeAttachment.Volume.ID != nil {
+		bootVolumeId = *instance.BootVolumeAttachment.Volume.ID
+	} else {
+		return ""
+	}
+	volumeIId := irs.IID{SystemId: bootVolumeId}
+	rawVolume, err := getRawVolume(volumeIId, vmHandler.VpcService, vmHandler.Ctx)
+
+	if err == nil {
+		return strconv.Itoa(int(*rawVolume.Capacity))
+	}
+	return ""
+}
+
+// networkDone <- vmHandler.getNetworkInfo(*instance.ID, *instance.PrimaryNetworkInterface.ID, *instance.VPC.ID)
+func (vmHandler *IbmVMHandler) getNetworkInfo(instance vpcv1.Instance) vmNetworkInfo {
+	// Network Get
+	var instanceId = ""
+	var instancePrimaryNIId = ""
+	var vpcId = ""
+	if instance.ID != nil {
+		instanceId = *instance.ID
+	}
+	if instance.PrimaryNetworkInterface != nil && instance.PrimaryNetworkInterface.ID != nil {
+		instancePrimaryNIId = *instance.PrimaryNetworkInterface.ID
+	}
+	if instance.VPC != nil && instance.VPC.ID != nil {
+		vpcId = *instance.VPC.ID
+	}
+	if instanceId == "" || instancePrimaryNIId == "" {
+		return vmNetworkInfo{}
+	}
+	info := vmNetworkInfo{}
+	instanceNetworkInterfaceOptions := &vpcv1.GetInstanceNetworkInterfaceOptions{}
+	instanceNetworkInterfaceOptions.SetID(instancePrimaryNIId)
+	instanceNetworkInterfaceOptions.SetInstanceID(instanceId)
+	networkInterface, _, err := vmHandler.VpcService.GetInstanceNetworkInterfaceWithContext(vmHandler.Ctx, instanceNetworkInterfaceOptions)
+	if err == nil {
+		// SET IP
+		info.NetworkInterface = *networkInterface.Name
+		if networkInterface.FloatingIps != nil && len(networkInterface.FloatingIps) > 0 {
+			info.PublicIP = *networkInterface.FloatingIps[0].Address
+			info.SSHAccessPoint = info.PublicIP + ":22"
+		}
+		if vpcId == "" {
+			info.SecurityGroupIIds = []irs.IID{}
+			return info
+		}
+		// SET SG
+		getVpcOptions := &vpcv1.GetVPCOptions{}
+		getVpcOptions.SetID(vpcId)
+		vpc, _, _ := vmHandler.VpcService.GetVPCWithContext(vmHandler.Ctx, getVpcOptions)
+		var sgIIds []irs.IID
+		if vpc != nil && vpc.DefaultSecurityGroup != nil {
+			defaultSGId := *vpc.DefaultSecurityGroup.ID
+			vmSecurityGroups := networkInterface.SecurityGroups
+			for _, seg := range vmSecurityGroups {
+				if defaultSGId != *seg.ID {
+					sgIIds = append(sgIIds, irs.IID{NameId: *seg.Name, SystemId: *seg.ID})
+				}
+			}
+		}
+		info.SecurityGroupIIds = sgIIds
+	}
+	return info
+}
+
 func (vmHandler *IbmVMHandler) setVmInfo(instance vpcv1.Instance) (irs.VMInfo, error) {
+	var dataDiskIIDs []irs.IID
+	for _, rawDataDisk := range instance.VolumeAttachments {
+		if *rawDataDisk.Volume.ID != *instance.BootVolumeAttachment.Volume.ID {
+			dataDiskIIDs = append(dataDiskIIDs, irs.IID{
+				NameId:   *rawDataDisk.Volume.Name,
+				SystemId: *rawDataDisk.Volume.ID,
+			})
+		}
+	}
 	vmInfo := irs.VMInfo{
 		IId: irs.IID{
 			NameId:   *instance.Name,
@@ -1003,59 +1269,96 @@ func (vmHandler *IbmVMHandler) setVmInfo(instance vpcv1.Instance) (irs.VMInfo, e
 		VMUserId:       CBDefaultVmUserName,
 		RootDeviceName: "Not visible in IBMCloud-VPC",
 		VMBlockDisk:    "Not visible in IBMCloud-VPC",
+		DataDiskIIDs:   dataDiskIIDs,
 	}
+	chanCount := 0
 	// KeyGet
-	instanceInitializationOptions := &vpcv1.GetInstanceInitializationOptions{}
-	instanceInitializationOptions.SetID(*instance.ID)
-	initData, _, err := vmHandler.VpcService.GetInstanceInitializationWithContext(vmHandler.Ctx, instanceInitializationOptions)
-	if err == nil && initData.Keys != nil && len(initData.Keys) > 0 {
-		jsonInitDataBytes, err := json.Marshal(initData.Keys[0])
-		if err == nil {
-			var keyRef vpcv1.KeyReferenceInstanceInitializationContextKeyReference
-			err = json.Unmarshal(jsonInitDataBytes, &keyRef)
-			if err == nil && keyRef.ID != nil && keyRef.Name != nil {
-				vmInfo.KeyPairIId = irs.IID{
-					NameId:   *keyRef.Name,
-					SystemId: *keyRef.ID,
-				}
-			}
+	keyDone := make(chan irs.IID)
+	chanCount++
+	go func() {
+		keyDone <- vmHandler.getKeyIId(instance)
+	}()
+
+	networkDone := make(chan vmNetworkInfo)
+	chanCount++
+	go func() {
+		networkDone <- vmHandler.getNetworkInfo(instance)
+	}()
+
+	volumeDone := make(chan string)
+	chanCount++
+	go func() {
+		volumeDone <- vmHandler.getBootVolumeInfo(instance)
+	}()
+
+	for i := 0; i < chanCount; i++ {
+		select {
+		case keyIID := <-keyDone:
+			vmInfo.KeyPairIId = keyIID
+		case netInfo := <-networkDone:
+			vmInfo.NetworkInterface = netInfo.NetworkInterface
+			vmInfo.PublicIP = netInfo.PublicIP
+			vmInfo.SSHAccessPoint = netInfo.SSHAccessPoint
+			vmInfo.SecurityGroupIIds = netInfo.SecurityGroupIIds
+		case volumeRootDiskSize := <-volumeDone:
+			vmInfo.RootDiskSize = volumeRootDiskSize
 		}
-	}
-	// Network Get
-	instanceNetworkInterfaceOptions := &vpcv1.GetInstanceNetworkInterfaceOptions{}
-	instanceNetworkInterfaceOptions.SetID(*instance.PrimaryNetworkInterface.ID)
-	instanceNetworkInterfaceOptions.SetInstanceID(*instance.ID)
-	networkInterface, _, err := vmHandler.VpcService.GetInstanceNetworkInterfaceWithContext(vmHandler.Ctx, instanceNetworkInterfaceOptions)
-	// TODO : DNS
-	if err == nil {
-		// SET IP
-		vmInfo.NetworkInterface = *networkInterface.Name
-		if networkInterface.FloatingIps != nil && len(networkInterface.FloatingIps) > 0 {
-			vmInfo.PublicIP = *networkInterface.FloatingIps[0].Address
-			vmInfo.SSHAccessPoint = vmInfo.PublicIP + ":22"
-		}
-		// SET SG
-		getVpcOptions := &vpcv1.GetVPCOptions{}
-		getVpcOptions.SetID(*instance.VPC.ID)
-		vpc, _, _ := vmHandler.VpcService.GetVPCWithContext(vmHandler.Ctx, getVpcOptions)
-		var sgIIds []irs.IID
-		if vpc != nil && vpc.DefaultSecurityGroup != nil {
-			defaultSGId := *vpc.DefaultSecurityGroup.ID
-			vmSecurityGroups := networkInterface.SecurityGroups
-			for _, seg := range vmSecurityGroups {
-				if defaultSGId != *seg.ID {
-					sgIIds = append(sgIIds, irs.IID{NameId: *seg.Name, SystemId: *seg.ID})
-				}
-			}
-		}
-		vmInfo.SecurityGroupIIds = sgIIds
 	}
 
-	volumeIId := irs.IID{SystemId: *instance.BootVolumeAttachment.Volume.ID}
-	rawVolume, err := getRawVolume(volumeIId, vmHandler.VpcService, vmHandler.Ctx)
-	if err == nil {
-		vmInfo.RootDiskSize = strconv.Itoa(int(*rawVolume.Capacity))
+	vmInfo.RootDiskType = "general-purpose"
+
+	imageId := instance.Image.ID
+	imageHandler := IbmImageHandler{
+		CredentialInfo: vmHandler.CredentialInfo,
+		Region:         vmHandler.Region,
+		VpcService:     vmHandler.VpcService,
+		Ctx:            vmHandler.Ctx,
 	}
+	myImageHandler := IbmMyImageHandler{
+		CredentialInfo: vmHandler.CredentialInfo,
+		Region:         vmHandler.Region,
+		VpcService:     vmHandler.VpcService,
+		Ctx:            vmHandler.Ctx,
+	}
+
+	vmInfo.VMBootDisk = *instance.BootVolumeAttachment.Volume.ID
+
+	sourceImage, getSourceImageErr := imageHandler.GetImage(irs.IID{SystemId: *imageId})
+	if getSourceImageErr == nil {
+		vmInfo.ImageIId = sourceImage.IId
+		vmInfo.ImageType = irs.PublicImage
+
+		image, getImageErr := getRawImage(irs.IID{SystemId: *imageId}, vmHandler.VpcService, vmHandler.Ctx)
+		if getImageErr == nil {
+			isWindows := strings.Contains(strings.ToLower(*image.OperatingSystem.Name), "windows")
+			if isWindows {
+				vmInfo.VMUserId = "Administrator"
+			} else {
+				vmInfo.VMUserId = "cb-user"
+			}
+		}
+
+		return vmInfo, nil
+	}
+
+	sourceMyImage, getSourceMyImageErr := myImageHandler.GetMyImage(irs.IID{SystemId: *imageId})
+	if getSourceMyImageErr == nil {
+		vmInfo.ImageIId = sourceMyImage.IId
+		vmInfo.ImageType = irs.MyImage
+
+		rawSnapshot, _, getRawSnapshotErr := myImageHandler.VpcService.GetSnapshotWithContext(myImageHandler.Ctx, &vpcv1.GetSnapshotOptions{ID: imageId})
+		if getRawSnapshotErr == nil {
+			isWindows := strings.Contains(strings.ToLower(*rawSnapshot.OperatingSystem.Name), "windows")
+			if isWindows {
+				vmInfo.VMUserId = "Administrator"
+			} else {
+				vmInfo.VMUserId = "cb-user"
+			}
+		}
+
+		return vmInfo, nil
+	}
+
 	return vmInfo, nil
 }
 
@@ -1095,4 +1398,67 @@ func notSupportRootDiskCustom(vmReqInfo irs.VMReqInfo) error {
 		return errors.New("IBM-VPC_CANNOT_CHANGE_ROOTDISKSIZE")
 	}
 	return nil
+}
+
+type vmInfoWithError struct {
+	VMInfo irs.VMInfo
+	err    error
+}
+
+func (vmHandler *IbmVMHandler) setVmInfoWithContext(ctx context.Context, instance vpcv1.Instance) (irs.VMInfo, error) {
+	done := make(chan vmInfoWithError)
+
+	go func() {
+		vmInfo, err := vmHandler.setVmInfo(instance)
+		done <- vmInfoWithError{
+			VMInfo: vmInfo,
+			err:    err,
+		}
+	}()
+	select {
+	case vmInfoWithErrorDone := <-done:
+		return vmInfoWithErrorDone.VMInfo, vmInfoWithErrorDone.err
+	case <-ctx.Done():
+		return irs.VMInfo{}, nil
+	}
+}
+
+func (vmHandler *IbmVMHandler) setVMList(instanceList []vpcv1.Instance) ([]*irs.VMInfo, error) {
+	vmListCount := len(instanceList)
+	vmList := make([]*irs.VMInfo, len(instanceList))
+
+	if vmListCount == 0 {
+		return vmList, nil
+	}
+	var wg sync.WaitGroup
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	defer cancel()
+
+	var globalErr error
+
+	for i, vmInstance := range instanceList {
+		wg.Add(1)
+		index := i
+		dumpInstance := vmInstance
+		go func() {
+			defer wg.Done()
+			vmInfo, err := vmHandler.setVmInfoWithContext(ctx, dumpInstance)
+			if err != nil {
+				cancel()
+				if globalErr == nil {
+					globalErr = err
+				}
+			}
+			vmList[index] = &vmInfo
+		}()
+	}
+	wg.Wait()
+
+	if globalErr != nil {
+		return nil, globalErr
+	}
+
+	return vmList, nil
 }

@@ -52,9 +52,13 @@ create() {
 		{
 			"worker": [
 				{
-					"connection": "config-ibm-jp-tok",
+					"connection": "config-aws-ap-northeast-1",
 					"count": 1,
-					"spec": "bx2-2x8"
+					"spec": "t2.medium",
+					"rootDisk": {
+						"type": "defalut",
+						"size": "defalut"
+					}
 				}
 			]
 		}

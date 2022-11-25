@@ -25,11 +25,14 @@ const (
 	CreateSSHKeyFailedReason                  = ClusterReason("CreateSSHKeyFailedReason")
 	CreateVmImageFailedReason                 = ClusterReason("CreateVmImageFailedReason")
 	CreateVmSpecFailedReason                  = ClusterReason("CreateVmSpecFailedReason")
+	CreateNLBFailedReason                     = ClusterReason("CreateNLBFailedReason")
 	AddNodeEntityFailedReason                 = ClusterReason("AddNodeEntityFailedReason")
 	SetupBoostrapFailedReason                 = ClusterReason("SetupBoostrapFailedReason")
 	SetupHaproxyFailedReason                  = ClusterReason("SetupHaproxyFailedReason")
 	InitControlPlaneFailedReason              = ClusterReason("InitControlPlaneFailedReason")
+	InitExternalEtcdFailedReason              = ClusterReason("InitExternalEtcdFailedReason")
 	SetupNetworkCNIFailedReason               = ClusterReason("SetupNetworkCNIFailedReason")
+	SetupStorageClassFailedReason             = ClusterReason("SetupStorageClassFailedReason")
 	JoinControlPlaneFailedReason              = ClusterReason("JoinControlPlaneFailedReason")
 	JoinWorkerFailedReason                    = ClusterReason("JoinWorkerFailedReason")
 )
@@ -44,18 +47,21 @@ type ListModel struct {
 
 type Cluster struct {
 	Model
-	Status          ClusterStatus  `json:"status"`
-	MCIS            string         `json:"mcis"`
-	Namespace       string         `json:"namespace"`
-	Version         string         `json:"k8sVersion"`
-	ClusterConfig   string         `json:"clusterConfig"`
-	CpLeader        string         `json:"cpLeader"`
-	NetworkCni      app.NetworkCni `json:"networkCni" enums:"canal,kilo"`
-	Label           string         `json:"label"`
-	InstallMonAgent string         `json:"installMonAgent" example:"no" default:"yes"`
-	Description     string         `json:"description"`
-	CreatedTime     string         `json:"createdTime" example:"2022-01-02T12:00:00Z" default:""`
-	Nodes           []*Node        `json:"nodes"`
+	Status          ClusterStatus    `json:"status"`
+	MCIS            string           `json:"mcis"`
+	Namespace       string           `json:"namespace"`
+	Version         string           `json:"k8sVersion"`
+	ClusterConfig   string           `json:"clusterConfig"`
+	CpLeader        string           `json:"cpLeader"`
+	CpGroup         string           `json:"cpGroup"`
+	NetworkCni      app.NetworkCni   `json:"networkCni" enums:"canal,kilo"`
+	Label           string           `json:"label"`
+	InstallMonAgent string           `json:"installMonAgent" example:"no" default:"yes"`
+	Loadbalancer    app.Loadbalancer `json:"loadbalancer" enums:"haproxy,nlb" example:"haproxy" default:"haproxy"`
+	Etcd            app.Etcd         `json:"etcd" enums:"local,external" example:"local" default:"local"`
+	Description     string           `json:"description"`
+	CreatedTime     string           `json:"createdTime" example:"2022-01-02T12:00:00Z" default:""`
+	Nodes           []*Node          `json:"nodes"`
 }
 
 type ClusterStatus struct {
@@ -78,7 +84,7 @@ type Node struct {
 	PublicIP    string   `json:"publicIp"`
 	Role        app.ROLE `json:"role" enums:"control-plane,worker"`
 	Spec        string   `json:"spec"`
-	Csp         app.CSP  `json:"csp" enums:"aws,gcp,azure,alibaba,tencent,openstack,ibm,cloudit"`
+	Csp         app.CSP  `json:"csp" enums:"aws,gcp,azure,alibaba,tencent,openstack,ibm,cloudit,ncp,ncpvpc,nhncloud"`
 	CreatedTime string   `json:"createdTime" example:"2022-01-02T12:00:00Z" default:""`
 	CspLabel    string   `json:"cspLabel"`
 	RegionLabel string   `json:"regionLabel"`

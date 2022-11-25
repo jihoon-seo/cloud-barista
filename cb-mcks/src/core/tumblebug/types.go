@@ -164,6 +164,8 @@ type MCIS struct {
 type VM struct {
 	Model
 	mcisName      string   //private
+	VmGroupId     string   `json:"subGroupId"`
+	VmGroupSize   string   `json:"subGroupSize"`
 	Config        string   `json:"connectionName"`
 	VPC           string   `json:"vNetId"`
 	Subnet        string   `json:"subnetId"`
@@ -174,10 +176,12 @@ type VM struct {
 	UserAccount   string   `json:"vmUserAccount"`
 	UserPassword  string   `json:"vmUserPassword"`
 	Description   string   `json:"description"`
-	PublicIP      string   `json:"publicIP"`      // output
-	PrivateIP     string   `json:"privateIP"`     // output
-	Status        VMStatus `json:"status"`        // output
-	SystemMessage string   `json:"systemMessage"` // output
+	PublicIP      string   `json:"publicIP"`                                 // output
+	PrivateIP     string   `json:"privateIP"`                                // output
+	Status        VMStatus `json:"status"`                                   // output
+	SystemMessage string   `json:"systemMessage"`                            // output
+	RootDiskType  string   `json:"rootDiskType,omitempty" example:"default"` // "", "default", "TYPE1", AWS: ["standard", "gp2", "gp3"], Azure: ["PremiumSSD", "StandardSSD", "StandardHHD"], GCP: ["pd-standard", "pd-balanced", "pd-ssd", "pd-extreme"], ALIBABA: ["cloud_efficiency", "cloud", "cloud_ssd"], TENCENT: ["CLOUD_PREMIUM", "CLOUD_SSD"]
+	RootDiskSize  string   `json:"rootDiskSize,omitempty" example:"default"` // "default", Integer (GB): ["50", ..., "1000"]
 	Region        struct {
 		Region string `json:"region"`
 		Zone   string `json:"zone"`
@@ -186,4 +190,51 @@ type VM struct {
 		VMSpecName string `json:"vmspecName"`
 	} `json:"cspViewVmDetail"` // output
 
+}
+
+type NLBProtocolBase struct {
+	Protocol string `json:"protocol"` // TCP|UDP
+	Port     string `json:"port"`     // 1-65535
+	Ip       string `json:"ip"`
+}
+
+type HealthCheckReq struct {
+	NLBProtocolBase
+	Interval  string `json:"interval"`  // secs, Interval time between health checks.
+	Timeout   string `json:"timeout"`   // secs, Waiting time to decide an unhealthy VM when no response.
+	Threshold string `json:"threshold"` // num, The number of continuous health checks to change the VM status.
+}
+
+type HealthCheckRes struct {
+	NLBProtocolBase
+	Interval  int `json:"interval"`  // secs, Interval time between health checks.
+	Timeout   int `json:"timeout"`   // secs, Waiting time to decide an unhealthy VM when no response.
+	Threshold int `json:"threshold"` // num, The number of continuous health checks to change the VM status.
+}
+
+type TargetGroup struct {
+	NLBProtocolBase
+	MCIS      string `json:"mcis"`
+	VmGroupId string `json:"subGroupId"`
+}
+
+// NLB
+type NLBBase struct {
+	Model
+	Config      string          `json:"connectionName"`
+	VPC         string          `json:"vNetId"`
+	Type        string          `json:"type" enums:"PUBLIC,INTERNAL"`
+	Scope       string          `json:"scope" enums:"REGION,GLOBAL"`
+	Listener    NLBProtocolBase `json:"listener"`
+	TargetGroup TargetGroup     `json:"targetGroup"`
+}
+
+type NLBRes struct {
+	NLBBase
+	HealthChecker HealthCheckRes `json:"healthChecker"`
+}
+
+type NLBReq struct {
+	NLBBase
+	HealthChecker HealthCheckReq `json:"healthChecker"`
 }
